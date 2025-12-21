@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AniMiKyoku - Ethereal Night Portal</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@300;400;500;600&amp;family=Noto+Sans+JP:wght@300;400;500;700&amp;family=Zen+Maru+Gothic:wght@300;400;500;700&amp;display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        // Dark Mode (Zen)
+                        "zen-bg": "#050608",
+                        "zen-surface": "#0f131a",
+                        "zen-ink": "#e2e8f0",
+                        "zen-stone": "#64748b",
+                        "zen-indigo": "#6366f1",
+                        "zen-bamboo": "#2dd4bf",
+                        "zen-moss": "#10b981",
+                        "zen-sakura": "#4f46e5",
+                        "zen-red": "#f43f5e",
+                        "zen-paper": "#1e293b",
+                        "zen-ice": "#cffafe",
+                        
+                        // Light Mode (Chill)
+                        "chill-bg": "#F8FAFC",
+                        "chill-surface": "#FFFFFF",
+                        "chill-ink": "#1E293B",
+                        "chill-stone": "#64748B",
+                        "chill-indigo": "#6366F1",
+                        "chill-sky": "#BAE6FD",
+                        "chill-mist": "#F1F5F9",
+                        "chill-bamboo": "#34D399",
+                        "chill-sakura": "#F472B6",
+                        "chill-border": "#E2E8F0"
+                    },
+                    fontFamily: {
+                        "body": ["Noto Sans", "sans-serif"],
+                        "jp": ["Noto Sans JP", "sans-serif"],
+                        "zen": ["Zen Maru Gothic", "sans-serif"]
+                    },
+                    backgroundImage: {
+                        "paper-texture": "url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSI0IiBmaWxsPSIjZmZmZmZmIi8+CjxyZWN0IHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiMwMDAwMDAiIG9wYWNpdHk9IjAuMDIiLz4KPC9zdmc+')",
+                        "night-gradient": "radial-gradient(circle at 50% 0%, rgba(30, 41, 59, 0.4) 0%, rgba(5, 6, 8, 1) 70%)",
+                        "moonlight": "linear-gradient(180deg, rgba(45, 212, 191, 0.05) 0%, rgba(99, 102, 241, 0.05) 100%)"
+                    },
+                    boxShadow: {
+                        "soft": "0 4px 20px -2px rgba(0, 0, 0, 0.1)",
+                        "floating": "0 20px 40px -4px rgba(0, 0, 0, 0.3)",
+                        "glow": "0 0 20px rgba(45, 212, 191, 0.15)",
+                        "inner-glow": "inset 0 0 40px rgba(99, 102, 241, 0.1)"
+                    },
+                    animation: {
+                        "float-slow": "float 8s ease-in-out infinite",
+                        "breathe": "breathe 6s ease-in-out infinite",
+                        "mist-flow": "mist 20s linear infinite",
+                        "pulse-glow": "pulse-glow 3s ease-in-out infinite",
+                        "twinkle": "twinkle 3s infinite ease-in-out",
+                        "drift": "drift 20s linear infinite",
+                        "pulse-slow": "pulse 6s cubic-bezier(0.4, 0, 0.6, 1) infinite"
+                    },
+                    keyframes: {
+                        float: {
+                            "0%, 100%": { transform: "translateY(0)" },
+                            "50%": { transform: "translateY(-15px)" }
+                        },
+                        breathe: {
+                            "0%, 100%": { opacity: "0.3", transform: "scale(1)" },
+                            "50%": { opacity: "0.5", transform: "scale(1.05)" }
+                        },
+                        mist: {
+                            "0%": { transform: "translateX(0)" },
+                            "100%": { transform: "translateX(-50%)" }
+                        },
+                        "pulse-glow": {
+                            "0%, 100%": { boxShadow: "0 0 15px rgba(45, 212, 191, 0.1)" },
+                            "50%": { boxShadow: "0 0 30px rgba(45, 212, 191, 0.3)" }
+                        },
+                        twinkle: {
+                            "0%, 100%": { opacity: "0.2", transform: "scale(1)" },
+                            "50%": { opacity: "0.6", transform: "scale(1.2)" }
+                        },
+                        drift: {
+                            "0%": { transform: "translateX(0) translateY(0)" },
+                            "50%": { transform: "translateX(20px) translateY(-10px)" },
+                            "100%": { transform: "translateX(0) translateY(0)" }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      .writing-vertical { writing-mode: vertical-rl; text-orientation: mixed; }
+      .bg-paper-texture { filter: invert(0.95) opacity(0.05); }
+      .star {
+          position: absolute;
+          background: white;
+          border-radius: 50%;
+          opacity: 0.3;
+          animation: twinkle 3s infinite ease-in-out;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.33.0",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "lucide-react": "https://esm.sh/lucide-react@^0.561.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-chill-bg dark:bg-zen-bg text-chill-ink dark:text-zen-ink font-body min-h-screen overflow-x-hidden transition-colors duration-500">
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
