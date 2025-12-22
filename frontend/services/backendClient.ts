@@ -15,8 +15,16 @@ export interface BackendIdentifyResponse {
   identifiedTitle: string;
   animeData: any; // TODO: Type this properly with AniList schema
   themeData: any[]; // Array of season theme data
+  
+  // Ingestion fields
+  needsConfirmation?: boolean;
+  confirmationMessage?: string;
+  canReportIncorrect?: boolean;
+  reportMessage?: string;
+  
   ragDebug?: {
-    topMatches?: Array<{ slug: string; similarity: number }>;
+    similarity?: number;
+    topMatches?: Array<{ title: string; slug: string; similarity: number }>;
     threshold?: number;
   };
 }
@@ -168,5 +176,162 @@ export async function searchYouTubeViaBackend(query: string): Promise<string | n
     console.error('Error searching YouTube:', error);
     // Don't throw - return null to allow graceful degradation
     return null;
+  }
+}
+
+/**
+ * Confirm and ingest a poster into the RAG database
+ * 
+ * @param file - The image file to ingest
+ * @param confirmedTitle - User-confirmed anime title
+ * @param source - Identification source: 'gemini', 'user_correction', or 'manual'
+ * @param saveImage - Whether to save the image file (default: true)
+ * @returns Response with ingestion details
+ * @throws Error with user-friendly message on failure
+ */
+export async function confirmAndIngest(
+  file: File,
+  confirmedTitle: string,
+  source: 'gemini' | 'user_correction' | 'manual' = 'gemini',
+  saveImage: boolean = true
+): Promise<{
+  success: boolean;
+  message: string;
+  slug: string;
+  ingestionDetails: {
+    indexSize: number;
+    wasDuplicate: boolean;
+    posterPath?: string;
+    embeddingShape: number[];
+  };
+}> {
+  try {
+    console.log('[CLIENT] Building ingestion request...', {
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      confirmedTitle,
+      source,
+      saveImage
+    });
+
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    // Build URL with query parameters
+    const url = new URL(`${BACKEND_URL}/api/confirm-and-ingest`);
+    url.searchParams.append('confirmed_title', confirmedTitle);
+    url.searchParams.append('source', source);
+    url.searchParams.append('save_image', saveImage.toString());
+
+    console.log('[CLIENT] Sending POST to:', url.toString());
+
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      body: formData,
+    });
+
+    console.log('[CLIENT] Response status:', response.status, response.statusText);
+
+    if (!response.ok) {
+      const errorData: BackendErrorResponse = await response.json().catch(() => ({
+        detail: `HTTP ${response.status}: ${response.statusText}`
+      }));
+      console.error('[CLIENT] Backend returned error:', errorData);
+      throw new Error(errorData.detail || `Backend error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log('[CLIENT] Backend response data:', data);
+    
+    if (!data.success) {
+      throw new Error(data.message || 'Failed to ingest poster');
+    }
+
+    return data;
+
+  } catch (error: any) {
+    console.error('[CLIENT] Error in confirmAndIngest:', error);
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      throw new Error(
+        'Unable to connect to backend server. Please ensure the backend is running at ' + BACKEND_URL
+      );
+    }
+    throw new Error(error.message || 'Unknown error occurred while ingesting poster');
+  }
+}
+
+/**
+ * Get RAG database statistics
+ * 
+ * @returns Database stats (index size, metadata count, health status)
+ */
+export async function getRagStats(): Promise<{
+  success: boolean;
+  indexSize: number;
+  metadataCount: number;
+  mappingCount: number;
+  isHealthy: boolean;
+  dimension: number;
+}> {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/stats`, {
+      method: 'GET',
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('Error fetching RAG stats:', error);
+    throw new Error(error.message || 'Failed to fetch database statistics');
+  }
+}
+
+/**
+ * Verify that a poster was successfully ingested
+ * 
+ * @param file - The poster image file
+ * @param expectedSlug - The slug returned from confirm-and-ingest
+ * @returns Verification result with similarity score
+ */
+export async function verifyIngestion(
+  file: File,
+  expectedSlug: string
+): Promise<{
+  success: boolean;
+  verified: boolean;
+  topMatch?: {
+    slug: string;
+    title: string;
+    similarity: number;
+  };
+  message: string;
+}> {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(
+      `${BACKEND_URL}/api/verify-ingestion?expected_slug=${encodeURIComponent(expectedSlug)}`,
+      {
+        method: 'POST',
+        body: formData,
+      }
+    );
+
+    if (!response.ok) {
+      const errorData: BackendErrorResponse = await response.json().catch(() => ({
+        detail: `HTTP ${response.status}: ${response.statusText}`
+      }));
+      throw new Error(errorData.detail || `Backend error: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('Error verifying ingestion:', error);
+    throw new Error(error.message || 'Failed to verify ingestion');
   }
 }

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from typing import Dict, Any, List, Optional
 import base64
 import numpy as np
+from pathlib import Path
 
 from services.gemini_service import (
     identify_anime_from_poster,
@@ -22,6 +23,7 @@ from services.animethemes_service import fetch_themes_from_api
 # RAG imports
 from rag.clip_embedder import generate_embedding
 from rag.vector_store import VectorStore
+from rag.ingestion import ingest_poster
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -217,10 +219,13 @@ async def identify_poster(
         mime_type = file.content_type or 'image/jpeg'
         
         logger.info(f"Received image upload: {file.filename} ({mime_type}, {len(image_data)} bytes)")
-        logger.info(f"Mode: {'RAG-only' if force_rag else 'RAG + Gemini fallback'}, threshold: {similarity_threshold}")
+        
+        # Ensure threshold has a default value
+        threshold = similarity_threshold if similarity_threshold is not None else 0.70
+        logger.info(f"Mode: {'RAG-only' if force_rag else 'RAG + Gemini fallback'}, threshold: {threshold}")
         
         # Step 1: Try RAG identification
-        rag_result = await identify_via_rag(image_data, mime_type, similarity_threshold=similarity_threshold)
+        rag_result = await identify_via_rag(image_data, mime_type, similarity_threshold=threshold)
         rag_debug = None
         
         if rag_result['found']:
@@ -275,15 +280,6 @@ async def identify_poster(
         # Step 5: Merge themes (API themes as base, Gemini OSTs as supplement)
         merged_themes = merge_theme_data(api_themes, gemini_themes)
         
-        # Step 6: If this was a Gemini identification, store it in RAG for future
-        if identification_method == 'gemini':
-            # TODO: Add poster to RAG database (CARD 7 - Auto-Ingestion)
-            # 1. Save image to posters/ directory
-            # 2. Generate CLIP embedding
-            # 3. Add to FAISS index
-            # 4. Update metadata JSON
-            logger.info(f"TODO: Add {anime_title} to RAG database")
-        
         response_data = {
             'success': True,
             'identificationMethod': identification_method,
@@ -295,6 +291,16 @@ async def identify_poster(
         # Include RAG debugging info if available
         if rag_debug:
             response_data['ragDebug'] = rag_debug
+        
+        # Add feedback support:
+        # - If Gemini was used (not in RAG), enable "Add to Database" button
+        # - If RAG was used, enable "Report Incorrect" button
+        if identification_method == 'gemini':
+            response_data['needsConfirmation'] = True
+            response_data['confirmationMessage'] = 'Add this anime to database for faster future searches?'
+        elif identification_method == 'rag':
+            response_data['canReportIncorrect'] = True
+            response_data['reportMessage'] = 'Was this identification incorrect?'
         
         return JSONResponse(response_data)
         
@@ -367,6 +373,105 @@ def merge_theme_data(api_themes: List[Dict], gemini_themes: List[Dict]) -> List[
     return merged
 
 
+@router.post("/confirm-and-ingest")
+async def confirm_and_ingest(
+    file: UploadFile = File(...),
+    confirmed_title: str = Query(..., description="User-confirmed anime title"),
+    source: str = Query("gemini", description="Source of identification: 'gemini', 'user_correction', 'manual'"),
+    save_image: str = Query("true", description="Whether to save poster image to disk")
+) -> JSONResponse:
+    """
+    Confirm anime identification and add poster to RAG database.
+    
+    This endpoint is called when:
+    1. User confirms a Gemini identification (adds new anime to RAG)
+    2. User corrects a RAG misidentification (adds correct variant)
+    3. User manually submits anime with title (advanced use case)
+    
+    User Flow:
+    ----------
+    Upload → RAG fails → Gemini identifies "Attack on Titan" →
+    User clicks "Add to Database" → This endpoint is called →
+    Poster is ingested → Next upload of same anime uses RAG ✓
+    
+    OR:
+    
+    Upload → RAG identifies "Death Note" → User clicks "This is wrong, it's Code Geass" →
+    Frontend calls this endpoint with confirmed_title="Code Geass" →
+    Correct poster is ingested → Future uploads match correctly ✓
+    
+    Args:
+        file: The poster image file
+        confirmed_title: User-confirmed anime title (from Gemini or manual input)
+        source: Where the identification came from
+        save_image: Whether to persist the image file (default: True)
+    
+    Returns:
+        JSON with:
+        - success: bool
+        - message: str
+        - slug: str - Generated slug for the anime
+        - ingestionDetails: Dict - Technical details about the ingestion
+    """
+    try:
+        # Read image data
+        image_data = await file.read()
+        file_ext = Path(file.filename or "image.jpg").suffix or ".jpg"
+        
+        # Parse save_image string to boolean
+        save_image_bool = save_image.lower() in ('true', '1', 'yes')
+        
+        logger.info(f"[CONFIRM-INGEST] Received confirmation for: {confirmed_title}")
+        logger.info(f"  File: {file.filename} ({len(image_data)} bytes)")
+        logger.info(f"  Source: {source}")
+        logger.info(f"  Save image: {save_image_bool}")
+        
+        # Ingest the poster
+        result = await ingest_poster(
+            image_bytes=image_data,
+            anime_title=confirmed_title,
+            source=source,
+            save_image=save_image_bool,
+            file_extension=file_ext
+        )
+        
+        if not result['success']:
+            logger.error(f"Ingestion failed: {result.get('error')}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to add poster to database: {result.get('error')}"
+            )
+        
+        logger.info(f"[CONFIRM-INGEST SUCCESS] {confirmed_title} -> {result['slug']}")
+        logger.info(f"  Index now contains {result['index_size']} vectors")
+        
+        # Prepare user-friendly response
+        message = f"✓ '{confirmed_title}' has been added to the database!"
+        if result.get('was_duplicate'):
+            message += " (Added as variant due to name collision)"
+        
+        return JSONResponse({
+            'success': True,
+            'message': message,
+            'slug': result['slug'],
+            'ingestionDetails': {
+                'indexSize': result['index_size'],
+                'wasDuplicate': result.get('was_duplicate', False),
+                'posterPath': result.get('poster_path'),
+                'embeddingShape': result.get('embedding_shape')
+            }
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in confirm_and_ingest: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process confirmation: {str(e)}"
+        )
+
+
 @router.get("/trending")
 async def get_trending_anime() -> JSONResponse:
     """
@@ -418,6 +523,116 @@ async def search_youtube_video(request: Dict[str, str]) -> JSONResponse:
     except Exception as e:
         logger.error(f"YouTube search error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stats")
+async def get_rag_stats() -> JSONResponse:
+    """
+    Get RAG database statistics.
+    
+    Useful for:
+    - Verifying ingestion success (check if index size increased)
+    - Monitoring database growth
+    - Dashboard displays
+    
+    Returns:
+        JSON with:
+        - indexSize: Total number of posters in database
+        - metadataCount: Number of entries in metadata
+        - mappingCount: Number of ID mappings
+        - isHealthy: Whether RAG system is operational
+    """
+    try:
+        if rag_store is None:
+            return JSONResponse({
+                'success': False,
+                'error': 'RAG store not initialized',
+                'isHealthy': False
+            })
+        
+        return JSONResponse({
+            'success': True,
+            'indexSize': rag_store.index.ntotal,
+            'metadataCount': len(rag_store.metadata),
+            'mappingCount': len(rag_store.id_to_slug),
+            'isHealthy': True,
+            'dimension': rag_store.dimension
+        })
+    except Exception as e:
+        logger.error(f"Error fetching stats: {e}")
+        return JSONResponse({
+            'success': False,
+            'error': str(e),
+            'isHealthy': False
+        })
+
+
+@router.post("/verify-ingestion")
+async def verify_ingestion(
+    file: UploadFile = File(...),
+    expected_slug: str = Query(..., description="Expected slug of the ingested poster")
+) -> JSONResponse:
+    """
+    Verify that a poster was successfully ingested by checking if it matches in RAG.
+    
+    This endpoint helps users confirm that their ingestion succeeded by:
+    1. Generating embedding for the uploaded poster
+    2. Searching RAG database
+    3. Checking if top match is the expected slug with high similarity
+    
+    Args:
+        file: The same poster image that was ingested
+        expected_slug: The slug returned from confirm-and-ingest
+    
+    Returns:
+        JSON with:
+        - verified: bool - True if poster matches expected slug with >0.95 similarity
+        - topMatch: Dict - Details about the top match
+        - similarity: float - Similarity score
+    """
+    try:
+        if rag_store is None:
+            raise HTTPException(503, "RAG store not initialized")
+        
+        # Read and generate embedding
+        image_data = await file.read()
+        embedding = await generate_embedding(image_data)
+        
+        # Search RAG
+        results = rag_store.search(embedding, k=1)
+        
+        if not results:
+            return JSONResponse({
+                'success': False,
+                'verified': False,
+                'error': 'No matches found in database'
+            })
+        
+        top_match = results[0]
+        is_verified = (
+            top_match.slug == expected_slug and 
+            top_match.similarity >= 0.95
+        )
+        
+        return JSONResponse({
+            'success': True,
+            'verified': is_verified,
+            'topMatch': {
+                'slug': top_match.slug,
+                'title': top_match.anime_title,
+                'similarity': round(top_match.similarity, 4)
+            },
+            'expectedSlug': expected_slug,
+            'message': (
+                f"✓ Verified! Poster matches '{expected_slug}' with {top_match.similarity:.2%} similarity"
+                if is_verified else
+                f"⚠️ Top match is '{top_match.slug}' (expected '{expected_slug}') with {top_match.similarity:.2%} similarity"
+            )
+        })
+        
+    except Exception as e:
+        logger.error(f"Error verifying ingestion: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
 
 
 @router.get("/health")

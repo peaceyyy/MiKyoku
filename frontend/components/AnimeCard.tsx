@@ -11,6 +11,8 @@ interface AnimeCardProps {
   loadingThemes: boolean;
   onPlayVideo: (query: string, meta?: {title?: string, artist?: string}) => void;
   identificationMethod?: 'rag' | 'gemini' | null;
+  onReportIncorrect?: () => void;
+  canReportIncorrect?: boolean;
 }
 
 const AnimeCard: React.FC<AnimeCardProps> = ({ 
@@ -19,7 +21,9 @@ const AnimeCard: React.FC<AnimeCardProps> = ({
   themeData, 
   loadingThemes, 
   onPlayVideo, 
-  identificationMethod 
+  identificationMethod,
+  onReportIncorrect,
+  canReportIncorrect = false
 }) => {
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
@@ -74,7 +78,7 @@ const AnimeCard: React.FC<AnimeCardProps> = ({
             {/* Content */}
             <div className="flex-1 text-center md:text-left pt-2 md:pt-16">
             <div className="mb-2">
-                <div className="flex items-center justify-center md:justify-start gap-2 mb-1">
+                <div className="flex items-center justify-center md:justify-start gap-2 mb-1 flex-wrap">
                     <span className="text-xs font-medium text-chill-indigo dark:text-zen-indigo tracking-wider uppercase transition-colors">
                         System Identity: {identifiedTitle}
                     </span>
@@ -88,8 +92,18 @@ const AnimeCard: React.FC<AnimeCardProps> = ({
                             }`}
                             title={identificationMethod === 'rag' ? 'Identified via RAG (Vector Search)' : 'Identified via Gemini LLM'}
                         >
-                            {identificationMethod === 'rag' ? '⚡ RAG' : '✨ Gemini'}
+                            {identificationMethod === 'rag' ? 'RAG' : 'Gemini'}
                         </span>
+                    )}
+                    {/* Report Incorrect Button */}
+                    {canReportIncorrect && onReportIncorrect && (
+                        <button
+                            onClick={onReportIncorrect}
+                            className="px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase rounded-full bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-all"
+                            title="Report incorrect identification and re-identify"
+                        >
+                            Report Incorrect
+                        </button>
                     )}
                 </div>
                 <h1 className="text-3xl md:text-5xl font-black text-chill-ink dark:text-zen-ink leading-tight mb-2 font-zen transition-colors">

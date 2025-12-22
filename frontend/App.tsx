@@ -1,12 +1,16 @@
-
 import React, { useState, useEffect } from 'react';
+import { Loader2 } from 'lucide-react';
 import FileUpload from './components/FileUpload';
 import AnimeCard from './components/AnimeCard';
 import VideoPlayer from './components/VideoPlayer';
+import ConfirmIngestionDialog from './components/ConfirmIngestionDialog';
 import { 
   identifyPosterViaBackend, 
   fetchTrendingAnimeViaBackend,
   searchYouTubeViaBackend,
+  confirmAndIngest,
+  verifyIngestion,
+  getRagStats,
   IdentificationMode 
 } from './services/backendClient';
 import { AnimeInfo, AppState, SeasonCollection, FeaturedAnime } from './types';
@@ -41,6 +45,22 @@ const App: React.FC = () => {
   const [activeVideoSource, setActiveVideoSource] = useState<string | null>(null);
   const [activeVideoMeta, setActiveVideoMeta] = useState<{title?: string, artist?: string}>({});
   const [loadingVideo, setLoadingVideo] = useState<boolean>(false);
+
+  // State for ingestion confirmation
+  const [showIngestionDialog, setShowIngestionDialog] = useState<boolean>(false);
+  const [pendingIngestion, setPendingIngestion] = useState<{
+    file: File;
+    title: string;
+    source: 'gemini' | 'user_correction';
+  } | null>(null);
+  const [isIngesting, setIsIngesting] = useState<boolean>(false);
+  
+  // State for success notification
+  const [successMessage, setSuccessMessage] = useState<string>("");
+  const [showSuccessNotification, setShowSuccessNotification] = useState<boolean>(false);
+
+  // State for re-identification overlay
+  const [isReidentifying, setIsReidentifying] = useState<boolean>(false);
 
   // Dynamic Background Color Logic
   // Uses the anime's cover color if available, otherwise defaults to theme color
@@ -89,6 +109,7 @@ const App: React.FC = () => {
       setLoadingThemes(false);
       setIsVideoPlayerVisible(false); // Close video on new upload
       setIdentificationMethod(null); // Reset method
+      setShowSuccessNotification(false); // Clear previous notifications
       
       // Read file for preview display
       const reader = new FileReader();
@@ -107,10 +128,140 @@ const App: React.FC = () => {
       setIdentificationMethod(result.identificationMethod); // Store which method was used
       setAppState(AppState.SUCCESS);
 
+      // Check if ingestion confirmation is needed (Gemini identification)
+      if (result.needsConfirmation) {
+        setPendingIngestion({
+          file: file,
+          title: result.identifiedTitle,
+          source: 'gemini'
+        });
+        setShowIngestionDialog(true);
+      }
+
     } catch (error: any) {
       console.error("Identification Error:", error);
       setErrorMsg(error.message || "An unknown error occurred");
       setAppState(AppState.ERROR);
+    }
+  };
+
+  const handleConfirmIngest = async (saveImage: boolean = true) => {
+    if (!pendingIngestion) return;
+
+    setIsIngesting(true);
+    try {
+      console.log('[INGEST] Starting ingestion...', {
+        title: pendingIngestion.title,
+        source: pendingIngestion.source,
+        saveImage
+      });
+
+      // Step 1: Ingest the poster
+      const result = await confirmAndIngest(
+        pendingIngestion.file,
+        pendingIngestion.title,
+        pendingIngestion.source,
+        saveImage
+      );
+
+      console.log('[INGEST] Ingestion result:', result);
+
+      // Step 2: Verify ingestion succeeded
+      try {
+        const verification = await verifyIngestion(
+          pendingIngestion.file,
+          result.slug
+        );
+
+        console.log('[INGEST] Verification result:', verification);
+
+        if (verification.verified) {
+          console.log('[VERIFY] Ingestion verified successfully');
+          setSuccessMessage(
+            `${result.message} Database now contains ${result.ingestionDetails.indexSize} posters.`
+          );
+        } else {
+          console.warn('[VERIFY] Ingestion completed but verification failed:', verification);
+          setSuccessMessage(
+            `${result.message} (Verification pending - similarity: ${verification.topMatch?.similarity})`
+          );
+        }
+      } catch (verifyError) {
+        // Verification failed, but ingestion succeeded - still show success
+        console.warn('[INGEST] Could not verify ingestion:', verifyError);
+        setSuccessMessage(result.message);
+      }
+
+      setShowSuccessNotification(true);
+      
+      // Auto-hide notification after 5 seconds
+      setTimeout(() => {
+        setShowSuccessNotification(false);
+      }, 5000);
+
+      // Close dialog
+      setShowIngestionDialog(false);
+      setPendingIngestion(null);
+
+    } catch (error: any) {
+      console.error("[INGEST] Ingestion Error:", error);
+      console.error("[INGEST] Error details:", {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      });
+      setErrorMsg(error.message || "Failed to add anime to database");
+      
+      // Keep dialog open on error so user can see what happened
+      // setShowIngestionDialog(false); // Don't close on error
+    } finally {
+      setIsIngesting(false);
+      console.log('[INGEST] Ingestion process complete, isIngesting set to false');
+    }
+  };
+
+  const handleCancelIngest = () => {
+    setShowIngestionDialog(false);
+    setPendingIngestion(null);
+  };
+
+  const handleReportIncorrect = async () => {
+    if (!currentImage) return;
+
+    try {
+      // Show overlay instead of changing page
+      setIsReidentifying(true);
+      setShowSuccessNotification(false);
+      
+      // Convert current image back to File object
+      const response = await fetch(currentImage);
+      const blob = await response.blob();
+      const file = new File([blob], 'report.jpg', { type: 'image/jpeg' });
+
+      // Force Gemini identification
+      const result = await identifyPosterViaBackend(file, 'gemini-only');
+      
+      // Update UI with new results (stay on same page)
+      setIdentifiedTitle(result.identifiedTitle);
+      setAnimeData(result.animeData);
+      setThemeData(result.themeData);
+      setIdentificationMethod(result.identificationMethod);
+      // appState stays as SUCCESS - don't change it
+
+      // Show ingestion dialog with user_correction source
+      setPendingIngestion({
+        file: file,
+        title: result.identifiedTitle,
+        source: 'user_correction'
+      });
+      setShowIngestionDialog(true);
+
+    } catch (error: any) {
+      console.error("Re-identification Error:", error);
+      setErrorMsg(error.message || "Failed to re-identify anime");
+      // Stay on results page but show error
+    } finally {
+      setIsReidentifying(false);
     }
   };
 
@@ -125,6 +276,9 @@ const App: React.FC = () => {
     setActiveVideoSource(null);
     setActiveVideoMeta({});
     setIdentificationMethod(null); // Reset method badge
+    setShowIngestionDialog(false);
+    setPendingIngestion(null);
+    setShowSuccessNotification(false);
   };
 
   const handlePlayVideo = async (queryOrUrl: string, meta?: {title?: string, artist?: string}) => {
@@ -306,6 +460,8 @@ const App: React.FC = () => {
                             loadingThemes={loadingThemes}
                             onPlayVideo={handlePlayVideo}
                             identificationMethod={identificationMethod}
+                            onReportIncorrect={handleReportIncorrect}
+                            canReportIncorrect={identificationMethod === 'rag'}
                         />
                     </div>
                 )}
@@ -456,6 +612,65 @@ const App: React.FC = () => {
                 artist={activeVideoMeta.artist}
                 onClose={handleCloseVideo} 
             />
+
+            {/* Ingestion Confirmation Dialog */}
+            <ConfirmIngestionDialog
+              isOpen={showIngestionDialog}
+              animeTitle={pendingIngestion?.title || ""}
+              message={pendingIngestion?.source === 'user_correction' 
+                ? "Add the correct identification to the database?" 
+                : "Add this anime to the database for faster future searches?"}
+              onConfirm={handleConfirmIngest}
+              onCancel={handleCancelIngest}
+              isProcessing={isIngesting}
+            />
+
+            {/* Re-identification Overlay */}
+            {isReidentifying && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <div className="absolute inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm" />
+                <div className="relative bg-white dark:bg-zen-surface rounded-2xl shadow-2xl p-8 animate-in zoom-in-95 duration-200 border border-chill-border dark:border-zen-indigo/20">
+                  <div className="flex flex-col items-center gap-4">
+                    <Loader2 className="w-12 h-12 text-chill-indigo dark:text-zen-bamboo animate-spin" />
+                    <div className="text-center">
+                      <h3 className="text-lg font-bold text-chill-ink dark:text-zen-ink mb-1">
+                        Identifying with Gemini
+                      </h3>
+                      <p className="text-sm text-chill-stone/70 dark:text-zen-stone/70">
+                        Re-analyzing poster with AI vision model...
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Success Notification */}
+            {showSuccessNotification && (
+              <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-4 fade-in duration-300">
+                <div className="bg-white dark:bg-zen-surface rounded-xl shadow-2xl border border-chill-border dark:border-zen-indigo/30 p-4 max-w-md flex items-start gap-3">
+                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-green-100 dark:bg-green-500/20 flex items-center justify-center">
+                    <span className="material-symbols-outlined text-green-600 dark:text-green-400 text-xl">
+                      check_circle
+                    </span>
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-bold text-chill-ink dark:text-zen-ink text-sm mb-1">
+                      Success!
+                    </h4>
+                    <p className="text-xs text-chill-stone dark:text-zen-stone">
+                      {successMessage}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowSuccessNotification(false)}
+                    className="flex-shrink-0 text-chill-stone/50 dark:text-zen-stone/50 hover:text-chill-ink dark:hover:text-zen-ink transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-lg">close</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
         </div>
     </div>
