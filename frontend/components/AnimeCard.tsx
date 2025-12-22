@@ -10,9 +10,17 @@ interface AnimeCardProps {
   themeData: SeasonCollection[] | null;
   loadingThemes: boolean;
   onPlayVideo: (query: string, meta?: {title?: string, artist?: string}) => void;
+  identificationMethod?: 'rag' | 'gemini' | null;
 }
 
-const AnimeCard: React.FC<AnimeCardProps> = ({ data, identifiedTitle, themeData, loadingThemes, onPlayVideo }) => {
+const AnimeCard: React.FC<AnimeCardProps> = ({ 
+  data, 
+  identifiedTitle, 
+  themeData, 
+  loadingThemes, 
+  onPlayVideo, 
+  identificationMethod 
+}) => {
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
   const handleAction = (actionId: string) => {
@@ -66,9 +74,24 @@ const AnimeCard: React.FC<AnimeCardProps> = ({ data, identifiedTitle, themeData,
             {/* Content */}
             <div className="flex-1 text-center md:text-left pt-2 md:pt-16">
             <div className="mb-2">
-                <span className="text-xs font-medium text-chill-indigo dark:text-zen-indigo tracking-wider uppercase mb-1 block transition-colors">
-                    System Identity: {identifiedTitle}
-                </span>
+                <div className="flex items-center justify-center md:justify-start gap-2 mb-1">
+                    <span className="text-xs font-medium text-chill-indigo dark:text-zen-indigo tracking-wider uppercase transition-colors">
+                        System Identity: {identifiedTitle}
+                    </span>
+                    {/* Identification Method Badge */}
+                    {identificationMethod && (
+                        <span 
+                            className={`px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase rounded-full ${
+                                identificationMethod === 'rag' 
+                                    ? 'bg-green-500/20 text-green-600 dark:text-green-400 border border-green-500/30' 
+                                    : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30'
+                            }`}
+                            title={identificationMethod === 'rag' ? 'Identified via RAG (Vector Search)' : 'Identified via Gemini LLM'}
+                        >
+                            {identificationMethod === 'rag' ? '⚡ RAG' : '✨ Gemini'}
+                        </span>
+                    )}
+                </div>
                 <h1 className="text-3xl md:text-5xl font-black text-chill-ink dark:text-zen-ink leading-tight mb-2 font-zen transition-colors">
                 {title}
                 </h1>

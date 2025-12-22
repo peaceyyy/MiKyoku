@@ -1,8 +1,6 @@
 """Normalize poster filenames per alignment spec and produce data/posters.json.
 
-Usage examples (PowerShell or cmd.exe):
-  python backend/scripts/normalize_filenames.py --source "poster_db" --dest "posters" --output "data/posters.json"
-  python backend/scripts/normalize_filenames.py --source "poster_db" --dest "posters" --output "data/posters.json" --apply
+
 
 What it does:
   - Scans source directory for image files

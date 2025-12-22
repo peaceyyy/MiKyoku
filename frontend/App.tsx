@@ -3,9 +3,12 @@ import React, { useState, useEffect } from 'react';
 import FileUpload from './components/FileUpload';
 import AnimeCard from './components/AnimeCard';
 import VideoPlayer from './components/VideoPlayer';
-import { identifyAnimeFromPoster, findYoutubeVideoId, fetchSupplementalThemes } from './services/geminiService';
-import { fetchThemesFromApi } from './services/animeThemesService'; 
-import { fetchAnimeInfo, fetchTrendingAnime } from './services/anilistService';
+import { 
+  identifyPosterViaBackend, 
+  fetchTrendingAnimeViaBackend,
+  searchYouTubeViaBackend,
+  IdentificationMode 
+} from './services/backendClient';
 import { AnimeInfo, AppState, SeasonCollection, FeaturedAnime } from './types';
 import { Loader2, Play, ExternalLink } from 'lucide-react';
 
@@ -24,6 +27,10 @@ const App: React.FC = () => {
   const [themeData, setThemeData] = useState<SeasonCollection[] | null>(null);
   const [loadingThemes, setLoadingThemes] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
+  
+  // Identification mode and method tracking
+  const [identificationMode, setIdentificationMode] = useState<IdentificationMode>('hybrid');
+  const [identificationMethod, setIdentificationMethod] = useState<'rag' | 'gemini' | null>(null);
   
   // Featured Content State
   const [featuredContent, setFeaturedContent] = useState<FeaturedAnime[]>([]);
@@ -44,38 +51,25 @@ const App: React.FC = () => {
     const loadFeatured = async () => {
         setLoadingFeatured(true);
         try {
-            const trending = await fetchTrendingAnime();
+            // Fetch trending anime via backend
+            const trending = await fetchTrendingAnimeViaBackend();
             
-            // Limit to 5 and Map to FeaturedAnime structure with Themes
-            const promises = trending.slice(0, 5).map(async (anime, index) => {
-                let featuredSong = undefined;
-                try {
-                    // Try to fetch themes for this anime
-                    const searchTitle = anime.title.english || anime.title.romaji;
-                    const themes = await fetchThemesFromApi(searchTitle);
-                    
-                    // Grab the first Opening available
-                    if (themes.length > 0 && themes[0].openings.length > 0) {
-                        featuredSong = themes[0].openings[0];
-                    }
-                } catch (e) {
-                    console.warn(`Could not load themes for ${anime.title.romaji}`);
-                }
-
-                // Simple numeric ranking
+            // Limit to 5 and Map to FeaturedAnime structure
+            // Note: Theme fetching is now handled by backend in the identify endpoint
+            // For featured content, we'll just display the anime without themes for now
+            const featured = trending.slice(0, 5).map((anime, index) => {
                 const rank = index + 1;
                 const formattedRank = rank < 10 ? `#0${rank}` : `#${rank}`;
 
                 return {
                     ...anime,
-                    featuredSong,
+                    featuredSong: undefined, // Backend doesn't provide this yet for trending
                     categoryTag: formattedRank,
                     tagColor: 'text-chill-indigo dark:text-zen-bamboo'
                 } as FeaturedAnime;
             });
 
-            const results = await Promise.all(promises);
-            setFeaturedContent(results);
+            setFeaturedContent(featured);
         } catch (e) {
             console.error("Failed to load featured content", e);
         } finally {
@@ -94,98 +88,29 @@ const App: React.FC = () => {
       setThemeData(null);
       setLoadingThemes(false);
       setIsVideoPlayerVisible(false); // Close video on new upload
+      setIdentificationMethod(null); // Reset method
       
-      // Convert to Base64
+      // Read file for preview display
       const reader = new FileReader();
       reader.readAsDataURL(file);
+      reader.onload = () => {
+        setCurrentImage(reader.result as string);
+      };
+
+      // Call unified backend API with selected mode
+      const result = await identifyPosterViaBackend(file, identificationMode);
       
-      reader.onload = async () => {
-        const base64Data = reader.result as string;
-        setCurrentImage(base64Data);
-        
-        // Strip the data URL prefix (e.g., "data:image/jpeg;base64,")
-        const base64Content = base64Data.split(',')[1];
-        const mimeType = file.type;
+      // Update UI with results
+      setIdentifiedTitle(result.identifiedTitle);
+      setAnimeData(result.animeData);
+      setThemeData(result.themeData);
+      setIdentificationMethod(result.identificationMethod); // Store which method was used
+      setAppState(AppState.SUCCESS);
 
-        try {
-          // Step 1: Identify using Gemini
-          const idResult = await identifyAnimeFromPoster(base64Content, mimeType);
-          
-          if (!idResult.isAnime) {
-             throw new Error(`This appears to be "${idResult.title}", which is not a recognized anime series. Please upload an anime poster or screenshot.`);
-          }
-
-          setIdentifiedTitle(idResult.title);
-          
-          // Step 2: Fetch Info from Anilist using the identified title
-          setAppState(AppState.FETCHING_INFO);
-          const info = await fetchAnimeInfo(idResult.title);
-          setAnimeData(info);
-          
-          // Step 3: Fetch Themes using the VALIDATED title from Anilist
-          setLoadingThemes(true);
-          setAppState(AppState.SUCCESS); // Show UI while themes load in background
-          
-          const searchTitle = info.title.english || info.title.romaji || info.title.native || idResult.title;
-          
-          // Parallel Fetch: Get reliable OPs/EDs from API, and iconic OSTs from Gemini
-          Promise.all([
-            fetchThemesFromApi(searchTitle),
-            fetchSupplementalThemes(searchTitle)
-          ]).then(([apiThemes, geminiThemes]) => {
-             
-             // Strategy: Use API themes as base. If API themes exist, inject Gemini OSTs into them.
-             // If API themes are missing (niche or not in DB), fallback to Gemini fully.
-
-             if (!apiThemes || apiThemes.length === 0) {
-                 setThemeData(geminiThemes);
-                 setLoadingThemes(false);
-                 return;
-             }
-
-             // Merge Strategy:
-             // 1. Flatten all Gemini OSTs
-             const extraOSTs = geminiThemes.flatMap(s => s.osts || []);
-             
-             if (extraOSTs.length > 0) {
-                 // 2. Add them to the first season of the API results (usually the main season)
-                 // This avoids complex fuzzy matching of season names
-                 const targetSeason = apiThemes[0];
-                 const existingTitles = new Set(targetSeason.osts.map(s => s.title.toLowerCase()));
-
-                 extraOSTs.forEach(ost => {
-                     // Deduplicate based on title
-                     if (!existingTitles.has(ost.title.toLowerCase())) {
-                         targetSeason.osts.push(ost);
-                         existingTitles.add(ost.title.toLowerCase());
-                     }
-                 });
-             }
-
-             setThemeData(apiThemes);
-             setLoadingThemes(false);
-
-          }).catch(err => {
-             console.error("Theme Fetch Error", err);
-             setLoadingThemes(false);
-          });
-
-        } catch (err: any) {
-          console.error(err);
-          setErrorMsg(err.message || "Failed to process the image.");
-          setAppState(AppState.ERROR);
-          setLoadingThemes(false);
-        }
-      };
-
-      reader.onerror = () => {
-        setErrorMsg("Failed to read the file.");
-        setAppState(AppState.ERROR);
-      };
-
-    } catch (e: any) {
-        setErrorMsg(e.message || "An unexpected error occurred.");
-        setAppState(AppState.ERROR);
+    } catch (error: any) {
+      console.error("Identification Error:", error);
+      setErrorMsg(error.message || "An unknown error occurred");
+      setAppState(AppState.ERROR);
     }
   };
 
@@ -199,6 +124,7 @@ const App: React.FC = () => {
     setIsVideoPlayerVisible(false);
     setActiveVideoSource(null);
     setActiveVideoMeta({});
+    setIdentificationMethod(null); // Reset method badge
   };
 
   const handlePlayVideo = async (queryOrUrl: string, meta?: {title?: string, artist?: string}) => {
@@ -215,7 +141,8 @@ const App: React.FC = () => {
         return;
     }
 
-    const videoId = await findYoutubeVideoId(queryOrUrl);
+    // Search for YouTube video via backend
+    const videoId = await searchYouTubeViaBackend(queryOrUrl);
     setActiveVideoSource(videoId);
     setLoadingVideo(false);
   };
@@ -228,7 +155,6 @@ const App: React.FC = () => {
   return (
     <div className={`${isDarkMode ? 'dark' : ''} transition-colors duration-500`}>
         <div className="min-h-screen bg-chill-bg dark:bg-zen-bg text-chill-ink dark:text-zen-ink font-body overflow-x-hidden selection:bg-chill-indigo/20 dark:selection:bg-zen-bamboo selection:text-chill-indigo dark:selection:text-zen-bg transition-colors duration-500">
-            
             {/* Background Elements - Swaps based on theme */}
             <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden transition-all duration-1000">
                 {isDarkMode ? (
@@ -300,6 +226,45 @@ const App: React.FC = () => {
 
                 {/* Right Actions */}
                 <div className="flex items-center gap-3 sm:gap-4">
+                    {/* Identification Mode Selector (Hidden on Success) */}
+                    {appState !== AppState.SUCCESS && (
+                        <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-white dark:bg-zen-surface/50 border border-chill-border dark:border-white/10 text-xs">
+                            <button
+                                onClick={() => setIdentificationMode('rag-only')}
+                                className={`px-2 py-1 rounded-full transition-all ${
+                                    identificationMode === 'rag-only' 
+                                        ? 'bg-chill-indigo dark:bg-zen-indigo text-white font-bold' 
+                                        : 'text-chill-stone dark:text-zen-stone hover:text-chill-ink dark:hover:text-zen-ink'
+                                }`}
+                                title="RAG Only Mode"
+                            >
+                                RAG
+                            </button>
+                            <button
+                                onClick={() => setIdentificationMode('hybrid')}
+                                className={`px-2 py-1 rounded-full transition-all ${
+                                    identificationMode === 'hybrid' 
+                                        ? 'bg-chill-indigo dark:bg-zen-indigo text-white font-bold' 
+                                        : 'text-chill-stone dark:text-zen-stone hover:text-chill-ink dark:hover:text-zen-ink'
+                                }`}
+                                title="Hybrid Mode (RAG + Gemini Fallback)"
+                            >
+                                Hybrid
+                            </button>
+                            <button
+                                onClick={() => setIdentificationMode('gemini-only')}
+                                className={`px-2 py-1 rounded-full transition-all ${
+                                    identificationMode === 'gemini-only' 
+                                        ? 'bg-chill-indigo dark:bg-zen-indigo text-white font-bold' 
+                                        : 'text-chill-stone dark:text-zen-stone hover:text-chill-ink dark:hover:text-zen-ink'
+                                }`}
+                                title="Gemini Only Mode"
+                            >
+                                Gemini
+                            </button>
+                        </div>
+                    )}
+
                     {/* New Scan Button (Visible on Results) */}
                     {appState === AppState.SUCCESS && (
                         <button 
@@ -340,6 +305,7 @@ const App: React.FC = () => {
                             themeData={themeData}
                             loadingThemes={loadingThemes}
                             onPlayVideo={handlePlayVideo}
+                            identificationMethod={identificationMethod}
                         />
                     </div>
                 )}
@@ -360,7 +326,7 @@ const App: React.FC = () => {
                                         <span className="text-transparent bg-clip-text bg-gradient-to-r from-zen-bamboo to-zen-indigo drop-shadow-[0_0_10px_rgba(45,212,191,0.3)]">AniMiKyoku</span>
                                     </h2>
                                     <p className="text-zen-stone text-lg max-w-lg mx-auto font-jp font-light tracking-wide">
-                                        Upload a moment under the stars. <br/>Let the melody find you in the dark.
+                                        Upload an anime screenshot or poster to instantly identify the series and discover its musical themes.
                                     </p>
                                 </>
                             ) : (
@@ -478,10 +444,7 @@ const App: React.FC = () => {
 
             {/* Footer */}
             <footer className="w-full text-center py-8 text-chill-stone/40 dark:text-zen-stone/40 text-[10px] uppercase tracking-[0.2em] bg-chill-bg dark:bg-zen-bg border-t border-chill-border/40 dark:border-white/5 relative z-10 transition-colors duration-500">
-                <div className="flex flex-col items-center gap-3">
-                    <span className="material-symbols-outlined text-lg opacity-40">{isDarkMode ? 'nightlight' : 'waves'}</span>
-                    <p>© Homer Adriel Dorin 2026</p>
-                </div>
+                
             </footer>
 
             {/* Floating Video Player */}

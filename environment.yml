@@ -1,52 +1,34 @@
-name: anime-id
+name: AniMiKyoku
 channels:
   - pytorch
   - nvidia
   - conda-forge
   - defaults
-
 dependencies:
-  # Core Python
-  - python=3.10
-
-  # PyTorch (GPU-enabled for Windows)
-  # Adjust pytorch-cuda version to match your CUDA (12.1, 11.8, etc.)
-  # For CPU-only, replace with: pytorch-cpu, torchvision-cpu
+  - python=3.11
+  - pip
+  # PyTorch (GPU) and CUDA — replace/remove pytorch-cuda for CPU-only
   - pytorch
   - torchvision
-  - pytorch-cuda=12.1
-
-  # FAISS (vector similarity search)
-  # Use faiss-cpu for simplicity; faiss-gpu if available for your CUDA
+  - torchaudio
+  - pytorch-cuda=12.1  # remove this line for CPU-only
+  # FAISS (choose one)
   - faiss-cpu
-
-  # Python packages via conda
-  - numpy
+  # - faiss-gpu
+  # Conda-installed Python packages
+  - fastapi
+  - uvicorn[standard]
+  - python-multipart
+  - httpx
   - pillow
   - tqdm
+  - rapidfuzz
   - requests
-
-  # Pip-installed packages
-  - pip
+  - python-dotenv
+  - numpy
+  # Pip-only packages
   - pip:
-    # CLIP model
     - open-clip-torch
     - ftfy
     - regex
-    
-    # FastAPI backend
-    - fastapi
-    - uvicorn[standard]
-    - python-multipart
-    
-    # Utilities
-    - rapidfuzz
-    - python-dotenv
-    
-    # Frontend prototyping (optional)
-    - streamlit
-    
-    # Testing & dev
-    - pytest
-    - black
-    - ruff
+    - google-genai

@@ -5,7 +5,7 @@ rapidfuzz
 requests
 python-dotenv
 
-# CLIP & embeddings
+# CLIP & embeddings (for future RAG implementation)
 open-clip-torch
 ftfy
 regex
@@ -15,9 +15,10 @@ numpy
 fastapi
 uvicorn[standard]
 python-multipart
+httpx  # Async HTTP client for API calls
 
-# Frontend prototyping (optional)
-streamlit
+# Google Gemini SDK
+google-genai
 
 # Note: Install PyTorch + FAISS via conda (see environment.yml)
 # For pip-only installs:
