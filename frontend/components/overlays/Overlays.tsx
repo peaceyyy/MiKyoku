@@ -19,7 +19,7 @@ export const ReidentificationOverlay: React.FC<ReidentificationOverlayProps> = (
               Identifying with Gemini
             </h3>
             <p className="text-sm text-chill-stone/70 dark:text-zen-stone/70">
-              Re-analyzing poster with AI vision model...
+              Re-analyzing poster with Gemini model...
             </p>
           </div>
         </div>

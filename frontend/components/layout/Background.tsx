@@ -1,5 +1,4 @@
 import React from 'react';
-import { AnimeInfo } from '../../types';
 
 interface BackgroundProps {
   isDarkMode: boolean;
@@ -21,7 +20,7 @@ const Background: React.FC<BackgroundProps> = ({
           <div className="absolute inset-0 bg-[#050608] z-0"></div>
           <div className="absolute inset-0 bg-paper-texture z-0 opacity-20"></div>
           
-          {/* Dynamic Ambient Glow */}
+          {/* Ambient Glow */}
           <div 
             className="absolute top-[-20%] left-[-20%] right-[-20%] h-[150vh] z-0 transition-colors duration-1000 ease-in-out opacity-40 blur-[120px]"
             style={{
@@ -47,12 +46,35 @@ const Background: React.FC<BackgroundProps> = ({
             }}
           ></div>
 
-          {/* Stars */}
-          <div className="star w-1 h-1 top-[15%] left-[20%] delay-0"></div>
-          <div className="star w-0.5 h-0.5 top-[25%] left-[80%] delay-700"></div>
-          <div className="star w-1 h-1 top-[60%] left-[10%] delay-300"></div>
-          <div className="star w-0.5 h-0.5 top-[10%] left-[60%] delay-500"></div>
-          <div className="star w-1 h-1 top-[80%] left-[85%] delay-200"></div>
+          {/* Subtle Floating Particles */}
+          <div 
+            className="absolute top-[15%] left-[20%] w-32 h-32 rounded-full opacity-20 blur-2xl transition-all duration-1000"
+            style={{ 
+              background: `radial-gradient(circle, ${primaryColor}, transparent 70%)`,
+              animation: 'float 12s ease-in-out infinite'
+            }}
+          ></div>
+          <div 
+            className="absolute top-[25%] right-[15%] w-24 h-24 rounded-full opacity-15 blur-2xl transition-all duration-1000"
+            style={{ 
+              background: `radial-gradient(circle, ${secondaryColor}, transparent 70%)`,
+              animation: 'float 15s ease-in-out infinite reverse'
+            }}
+          ></div>
+          <div 
+            className="absolute bottom-[30%] left-[15%] w-40 h-40 rounded-full opacity-15 blur-3xl transition-all duration-1000"
+            style={{ 
+              background: `radial-gradient(circle, ${tertiaryColor}, transparent 70%)`,
+              animation: 'float 18s ease-in-out infinite'
+            }}
+          ></div>
+          <div 
+            className="absolute top-[60%] right-[30%] w-28 h-28 rounded-full opacity-10 blur-2xl transition-all duration-1000"
+            style={{ 
+              background: `radial-gradient(circle, ${primaryColor}, transparent 70%)`,
+              animation: 'float 20s ease-in-out infinite reverse'
+            }}
+          ></div>
           
           {/* Vignette */}
           <div className="absolute inset-0 bg-radial-gradient-to-t from-transparent via-transparent to-black/20 z-10"></div>

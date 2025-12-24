@@ -331,19 +331,21 @@ const App: React.FC = () => {
 
               {/* Featured Content */}
               {appState === AppState.IDLE && (
-                <FeaturedContent 
-                  featuredContent={featuredContent}
-                  loadingFeatured={loadingFeatured}
-                  onPlayVideo={handlePlayVideo}
-                />
+                <div className="w-full max-w-5xl mx-auto">
+                  <FeaturedContent 
+                    featuredContent={featuredContent}
+                    loadingFeatured={loadingFeatured}
+                    onPlayVideo={handlePlayVideo}
+                  />
+                </div>
               )}
             </>
           )}
         </main>
 
         {/* Footer */}
-        <footer className="w-full text-center py-8 text-chill-stone/40 dark:text-zen-stone/40 text-[10px] uppercase tracking-[0.2em] bg-chill-bg dark:bg-zen-bg border-t border-chill-border/40 dark:border-white/5 relative z-10 transition-colors duration-500">
-          
+        <footer className="w-full text-center py-8 text-chill-stone/40 dark:text-zen-stone/100 text-[10px] uppercase tracking-[0.6em] dark:border-white/5 relative z-10 transition-colors duration-500">
+          <p>AniMiKyoku &copy; {new Date().getFullYear()} &mdash; BY HOMER ADRIEL DORIN</p>
         </footer>
 
         {/* Floating Video Player */}
