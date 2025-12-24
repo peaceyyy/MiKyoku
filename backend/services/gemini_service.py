@@ -11,14 +11,23 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-# Configure Gemini API Client
+# Configure Gemini API Client (lazy)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    logger.warning("GEMINI_API_KEY not found in environment variables")
-    raise ValueError("GEMINI_API_KEY is required")
+_client: Optional[genai.Client] = None
 
-# Initialize the client
-client = genai.Client(api_key=GEMINI_API_KEY)
+def is_configured() -> bool:
+    """Return True if GEMINI_API_KEY appears set."""
+    return bool(GEMINI_API_KEY and GEMINI_API_KEY.strip())
+
+def get_client() -> genai.Client:
+    """Lazily initialize Gemini client, raising RuntimeError if unconfigured."""
+    global _client
+    if _client is None:
+        if not is_configured():
+            logger.warning("Gemini requested but GEMINI_API_KEY is not configured")
+            raise RuntimeError("Gemini is not configured (missing GEMINI_API_KEY)")
+        _client = genai.Client(api_key=GEMINI_API_KEY)
+    return _client
 
 
 class IdentificationResult:
@@ -99,6 +108,7 @@ async def identify_anime_from_poster(base64_image: str, mime_type: str) -> Ident
         import base64
         image_data = base64.b64decode(base64_image)
         
+        client = get_client()
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[
@@ -122,6 +132,9 @@ async def identify_anime_from_poster(base64_image: str, mime_type: str) -> Ident
             confidence=result.get("confidence", "Medium")
         )
         
+    except RuntimeError as e:
+        logger.warning(f"Gemini unavailable: {e}")
+        raise Exception("Gemini is not configured. Please set GEMINI_API_KEY or use RAG-only mode.")
     except Exception as e:
         logger.error(f"Gemini Analysis Error: {e}")
         raise Exception(f"Failed to identify the image: {str(e)}")
@@ -157,6 +170,7 @@ async def fetch_supplemental_themes(anime_title: str) -> List[SeasonCollection]:
         - endings (array of objects with title and artist)
         - osts (array of objects with title and artist)"""
         
+        client = get_client()
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
@@ -187,6 +201,9 @@ async def fetch_supplemental_themes(anime_title: str) -> List[SeasonCollection]:
         
         return seasons
         
+    except RuntimeError as e:
+        logger.warning(f"Gemini unavailable for supplemental themes: {e}")
+        return []
     except Exception as e:
         logger.error(f"Gemini Supplemental Fetch Error: {e}")
         return []
@@ -194,7 +211,11 @@ async def fetch_supplemental_themes(anime_title: str) -> List[SeasonCollection]:
 
 async def find_youtube_video_id(search_query: str) -> Optional[str]:
     """
-    Uses Gemini with Google Search tool to find a YouTube video ID.
+    Find YouTube video ID using YouTube API v3 (primary) with Gemini fallback.
+    
+    Pipeline:
+    1. Try YouTube Data API v3 (fast, reliable, no AI quota)
+    2. If API unavailable/fails → Fall back to Gemini with Google Search
     
     Args:
         search_query: The song/anime to search for
@@ -202,7 +223,28 @@ async def find_youtube_video_id(search_query: str) -> Optional[str]:
     Returns:
         11-character YouTube video ID or None
     """
+    # Step 1: Try YouTube Data API v3 first
     try:
+        from services.youtube_service import search_youtube_video_id
+        
+        logger.info(f"[YouTube Search] Trying YouTube API for: {search_query}")
+        video_id = await search_youtube_video_id(search_query)
+        
+        if video_id:
+            logger.info(f"[YouTube Search] ✓ Found via YouTube API: {video_id}")
+            return video_id
+        
+        logger.info("[YouTube Search] YouTube API returned no results, falling back to Gemini...")
+        
+    except ImportError:
+        logger.warning("[YouTube Search] youtube_service not available, using Gemini only")
+    except Exception as e:
+        logger.warning(f"[YouTube Search] YouTube API error: {e}, falling back to Gemini...")
+    
+    # Step 2: Fall back to Gemini
+    try:
+        logger.info(f"[YouTube Search] Using Gemini fallback for: {search_query}")
+        
         prompt = f"""Find a valid YouTube video ID for the anime song query: "{search_query}".
         
         CRITICAL INSTRUCTIONS FOR EMBEDDING:
@@ -220,22 +262,32 @@ async def find_youtube_video_id(search_query: str) -> Optional[str]:
         
         Extract ONLY the 11-character YouTube video ID. Return ONLY the ID string, no other text."""
         
-        # Note: Google Search tool integration may require additional setup
-        # For now, we'll return the text response
+        client = get_client()
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-2.5-flash',
             contents=prompt
         )
         
         if not response.text:
+            logger.warning("[YouTube Search] Gemini returned empty response")
             return None
         
         # Extract ID using regex
         import re
         match = re.search(r'[a-zA-Z0-9_-]{11}', response.text)
         
-        return match.group(0) if match else None
+        video_id = match.group(0) if match else None
         
+        if video_id:
+            logger.info(f"[YouTube Search] ✓ Found via Gemini: {video_id}")
+        else:
+            logger.warning("[YouTube Search] Gemini failed to extract video ID")
+        
+        return video_id
+        
+    except RuntimeError as e:
+        logger.warning(f"[YouTube Search] Gemini not configured: {e}")
+        return None
     except Exception as e:
-        logger.error(f"Youtube Search Error: {e}")
+        logger.error(f"[YouTube Search] Gemini fallback error: {e}")
         return None

@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2 } from 'lucide-react';
 import FileUpload from './components/FileUpload';
 import AnimeCard from './components/AnimeCard';
 import VideoPlayer from './components/VideoPlayer';
@@ -10,7 +9,6 @@ import {
   searchYouTubeViaBackend,
   confirmAndIngest,
   verifyIngestion,
-  getRagStats,
   IdentificationMode 
 } from './services/backendClient';
 import { AnimeInfo, AppState, SeasonCollection, FeaturedAnime } from './types';

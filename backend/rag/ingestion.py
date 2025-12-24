@@ -16,7 +16,6 @@ This enables the database to grow organically as users upload new posters.
 """
 
 import json
-import asyncio
 import numpy as np
 from pathlib import Path
 from datetime import datetime, timezone
@@ -129,42 +128,6 @@ async def ingest_poster(
     """
     Add a new anime poster to the RAG database.
     
-    This function is thread-safe and handles concurrent ingestion requests.
-    
-    Args:
-        image_bytes: Raw image data from upload
-        anime_title: Confirmed anime title (from Gemini or user)
-        source: Where the identification came from ("gemini", "user_correction", "manual")
-        save_image: Whether to save the image file to disk (default: True)
-        file_extension: Image file extension (default: .jpg)
-        metadata_overrides: Additional metadata fields to include
-    
-    Returns:
-        Dictionary with:
-        - success: bool
-        - slug: str - The generated slug
-        - poster_path: str - Path to saved image (if save_image=True)
-        - embedding_shape: tuple - Shape of generated embedding
-        - was_duplicate: bool - True if slug collision occurred
-    
-    Process Flow:
-    --------------
-    1. Normalize title to slug
-    2. Handle slug collisions (add _alt suffix if needed)
-    3. Generate CLIP embedding (512-dimensional vector)
-    4. Acquire thread lock for index updates
-    5. Load current metadata and FAISS index
-    6. Add embedding to index
-    7. Update metadata JSON
-    8. Save index and mapping to disk
-    9. Optionally save poster image
-    10. Release lock
-    
-    Thread Safety:
-    --------------
-    Uses a global threading.Lock to prevent race conditions when multiple
-    users submit posters simultaneously. This ensures index consistency.
-    
     Error Handling:
     ---------------
     - If embedding generation fails: raises exception, no changes made
@@ -195,9 +158,13 @@ async def ingest_poster(
             metadata_path = DATA_DIR / "posters.json"
             index_path = DATA_DIR / "index.faiss"
             
-            # Load current metadata
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
+            # Load current metadata (create if missing)
+            if metadata_path.exists():
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            else:
+                logger.warning(f"Metadata file not found at {metadata_path}, creating new metadata store")
+                metadata = {}
             
             # Handle slug collisions
             existing_slugs = set(metadata.keys())
@@ -283,32 +250,3 @@ async def ingest_poster(
             'slug': None
         }
 
-
-async def remove_poster(slug: str) -> Dict[str, Any]:
-    """
-    Remove a poster from the RAG database.
-    
-    WARNING: This is a destructive operation that requires rebuilding the entire
-    FAISS index because FAISS doesn't support efficient deletion.
-    
-    Process:
-    1. Remove from metadata JSON
-    2. Rebuild FAISS index from remaining embeddings
-    3. Optionally delete poster file
-    
-    Args:
-        slug: Slug of poster to remove
-    
-    Returns:
-        Dictionary with success status and details
-    
-    Note: This is intentionally not implemented for MVP. If needed, the safest
-    approach is to mark entries as "deleted" in metadata and filter them out
-    during search, then periodically rebuild the index offline.
-    """
-    logger.warning(f"remove_poster() called for {slug} - NOT IMPLEMENTED")
-    return {
-        'success': False,
-        'error': 'Poster removal not implemented in MVP. Contact admin for manual removal.',
-        'reason': 'FAISS deletion requires full index rebuild'
-    }

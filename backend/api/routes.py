@@ -12,7 +12,8 @@ from pathlib import Path
 
 from services.gemini_service import (
     identify_anime_from_poster,
-    fetch_supplemental_themes
+    fetch_supplemental_themes,
+    is_configured as gemini_is_configured
 )
 from services.anilist_service import (
     fetch_anime_info,
@@ -251,7 +252,14 @@ async def identify_poster(
                         'threshold': similarity_threshold
                     }
                 }, status_code=404)
-            
+            # If Gemini is not configured, return a clear error
+            if not gemini_is_configured():
+                logger.warning("Gemini not configured; cannot perform fallback identification")
+                raise HTTPException(status_code=503, detail=(
+                    "RAG did not find a confident match and Gemini is not configured. "
+                    "Please set GEMINI_API_KEY or switch to 'rag-only' mode."
+                ))
+
             anime_title = await identify_via_gemini(image_data, mime_type)
             identification_method = 'gemini'
             rag_debug = {
