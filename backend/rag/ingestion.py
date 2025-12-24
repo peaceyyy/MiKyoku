@@ -23,6 +23,7 @@ from typing import Optional, Dict, Any
 import logging
 import re
 import unicodedata
+import portalocker  # Cross-platform file locking
 
 from rag.clip_embedder import generate_embedding
 from rag.vector_store import VectorStore
@@ -158,67 +159,95 @@ async def ingest_poster(
             metadata_path = DATA_DIR / "posters.json"
             index_path = DATA_DIR / "index.faiss"
             
-            # Load current metadata (create if missing)
-            if metadata_path.exists():
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-            else:
-                logger.warning(f"Metadata file not found at {metadata_path}, creating new metadata store")
-                metadata = {}
+            # === CRITICAL SECTION WITH FILE-LEVEL LOCKING ===
+            # Prevents race conditions when multiple users ingest simultaneously
+            # portalocker provides cross-platform file locking (Windows, Linux, macOS)
             
-            # Handle slug collisions
-            existing_slugs = set(metadata.keys())
-            final_slug = handle_slug_collision(base_slug, existing_slugs)
-            was_duplicate = (final_slug != base_slug)
+            # Step 3.1: Acquire exclusive file lock on metadata
+            logger.info("  Acquiring file lock on metadata...")
             
-            # Determine poster path
-            poster_filename = f"{final_slug}{file_extension}"
-            poster_path = POSTERS_DIR / poster_filename
-            relative_poster_path = f"data/posters/{poster_filename}"
+            # Ensure metadata file exists before locking
+            if not metadata_path.exists():
+                logger.warning(f"Metadata file not found, creating: {metadata_path}")
+                DATA_DIR.mkdir(parents=True, exist_ok=True)
+                with open(metadata_path, 'w', encoding='utf-8') as f:
+                    json.dump({}, f)
             
-            # Step 4: Load/create vector store
-            logger.info("  Loading vector store...")
-            store = VectorStore(
-                index_path=str(index_path),
-                metadata_path=str(metadata_path),
-                dimension=512
-            )
+            # Open metadata file with exclusive lock (blocks other processes)
+            with open(metadata_path, 'r+', encoding='utf-8') as metadata_file:
+                # Acquire exclusive lock (blocks until lock is available)
+                # LOCK_EX = Exclusive lock (write access)
+                # LOCK_NB = Non-blocking (optional, we want to wait)
+                portalocker.lock(metadata_file, portalocker.LOCK_EX)
+                logger.info("  ✓ File lock acquired")
+                
+                try:
+                    # Step 3.2: Read metadata atomically
+                    metadata_file.seek(0)
+                    content = metadata_file.read()
+                    metadata = json.loads(content) if content else {}
+                    
+                    # Handle slug collisions (now safe from races)
+                    existing_slugs = set(metadata.keys())
+                    final_slug = handle_slug_collision(base_slug, existing_slugs)
+                    was_duplicate = (final_slug != base_slug)
+                    
+                    # Determine poster path
+                    poster_filename = f"{final_slug}{file_extension}"
+                    poster_path = POSTERS_DIR / poster_filename
+                    relative_poster_path = f"data/posters/{poster_filename}"
+                    
+                    # Step 4: Load/create vector store
+                    logger.info("  Loading vector store...")
+                    store = VectorStore(
+                        index_path=str(index_path),
+                        metadata_path=str(metadata_path),
+                        dimension=512
+                    )
+                    
+                    # Step 5: Add embedding to FAISS index
+                    logger.info(f"  Adding embedding to FAISS index (current size: {store.index.ntotal})...")
+                    index_id = store.add_embedding(final_slug, embedding)
+                    logger.info(f"  ✓ Added to index at ID {index_id}")
+                    
+                    # Step 6: Update metadata in memory
+                    metadata[final_slug] = {
+                        "title": anime_title,
+                        "slug": final_slug,
+                        "path": relative_poster_path,
+                        "season": None,  # Could be enhanced to detect season from title
+                        "embedding": embedding.tolist(),  # Store for rebuild purposes
+                        "added_at": datetime.now(timezone.utc).isoformat(),
+                        "source": source,
+                        "notes": f"Auto-ingested from {source}"
+                    }
+                    
+                    # Add any override metadata
+                    if metadata_overrides:
+                        metadata[final_slug].update(metadata_overrides)
+                    
+                    logger.info("  ✓ Metadata updated in memory")
+                    
+                    # Step 7: Save index to disk
+                    logger.info("  Saving FAISS index...")
+                    store.save()
+                    logger.info("  ✓ Index saved")
+                    
+                    # Step 8: Write metadata atomically (still holding lock)
+                    logger.info("  Saving metadata JSON...")
+                    metadata_file.seek(0)
+                    metadata_file.truncate()  # Clear file before writing
+                    json.dump(metadata, metadata_file, indent=2, ensure_ascii=False)
+                    metadata_file.flush()  # Force write to disk
+                    logger.info("  ✓ Metadata saved")
+                    
+                finally:
+                    # Lock is automatically released when file is closed (context manager)
+                    logger.info("  Released file lock")
             
-            # Step 5: Add embedding to FAISS index
-            logger.info(f"  Adding embedding to FAISS index (current size: {store.index.ntotal})...")
-            index_id = store.add_embedding(final_slug, embedding)
-            logger.info(f"  ✓ Added to index at ID {index_id}")
+            # === END CRITICAL SECTION ===
             
-            # Step 6: Update metadata
-            metadata[final_slug] = {
-                "title": anime_title,
-                "slug": final_slug,
-                "path": relative_poster_path,
-                "season": None,  # Could be enhanced to detect season from title
-                "embedding": embedding.tolist(),  # Store for rebuild purposes
-                "added_at": datetime.now(timezone.utc).isoformat(),
-                "source": source,
-                "notes": f"Auto-ingested from {source}"
-            }
-            
-            # Add any override metadata
-            if metadata_overrides:
-                metadata[final_slug].update(metadata_overrides)
-            
-            logger.info("  ✓ Metadata updated")
-            
-            # Step 7: Save index to disk
-            logger.info("  Saving FAISS index...")
-            store.save()
-            logger.info("  ✓ Index saved")
-            
-            # Step 8: Save metadata JSON
-            logger.info("  Saving metadata JSON...")
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
-            logger.info("  ✓ Metadata saved")
-            
-            # Step 9: Optionally save poster image
+            # Step 9: Optionally save poster image (outside lock, safe to do concurrently)
             if save_image:
                 logger.info(f"  Saving poster image to {poster_path}...")
                 POSTERS_DIR.mkdir(parents=True, exist_ok=True)

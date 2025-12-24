@@ -32,3 +32,5 @@ dependencies:
     - ftfy
     - regex
     - google-genai
+    - portalocker  # Cross-platform file locking for concurrent ingestion safety
+    - slowapi  # Rate limiting for API endpoints

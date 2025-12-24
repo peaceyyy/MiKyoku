@@ -11,6 +11,14 @@ logger = logging.getLogger(__name__)
 
 ANIMETHEMES_API_URL = 'https://api.animethemes.moe/anime'
 
+# HTTP timeout configuration to prevent hanging on slow/unresponsive APIs
+HTTPX_TIMEOUT = httpx.Timeout(
+    connect=5.0,   # 5 seconds to connect
+    read=10.0,     # 10 seconds to read response
+    write=5.0,     # 5 seconds to write request
+    pool=5.0       # 5 seconds to get connection from pool
+)
+
 
 def normalize_tokens(text: str) -> List[str]:
     """
@@ -70,7 +78,7 @@ async def fetch_themes_from_api(anime_title: str) -> List[Dict[str, Any]]:
             'limit': '6'
         }
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
             response = await client.get(
                 ANIMETHEMES_API_URL,
                 params=params,

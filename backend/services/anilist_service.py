@@ -10,6 +10,18 @@ logger = logging.getLogger(__name__)
 
 ANILIST_API_URL = 'https://graphql.anilist.co'
 
+# HTTP timeout configuration to prevent hanging on slow/unresponsive APIs
+# connect: Time to establish connection
+# read: Time to receive response data
+# write: Time to send request data
+# pool: Time to acquire connection from pool
+HTTPX_TIMEOUT = httpx.Timeout(
+    connect=5.0,   # 5 seconds to connect
+    read=10.0,     # 10 seconds to read response
+    write=5.0,     # 5 seconds to write request
+    pool=5.0       # 5 seconds to get connection from pool
+)
+
 ANIME_QUERY = """
 query ($search: String) {
   Media (search: $search, type: ANIME) {
@@ -73,7 +85,7 @@ async def fetch_trending_anime() -> List[Dict[str, Any]]:
         List of anime info dictionaries
     """
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
             response = await client.post(
                 ANILIST_API_URL,
                 headers={
@@ -108,7 +120,7 @@ async def fetch_anime_info(title: str) -> Dict[str, Any]:
         Exception: If anime not found or API error occurs
     """
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
             response = await client.post(
                 ANILIST_API_URL,
                 headers={

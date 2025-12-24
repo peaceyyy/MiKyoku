@@ -16,8 +16,7 @@ log_dir.mkdir(exist_ok=True)
 
 from logging.handlers import RotatingFileHandler
 
-# Configure handlers: rotating file handler to avoid excessive IO and growth,
-# and a console stream handler for interactive sessions.
+
 file_handler = RotatingFileHandler(
     log_dir / "backend.log",
     maxBytes=5 * 1024 * 1024,  # 5 MB
@@ -37,13 +36,13 @@ root_logger.setLevel(logging.INFO)
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
-# Set console encoding to UTF-8 if possible (Windows compatibility)
-import sys
-if sys.platform == 'win32':
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except AttributeError:
-        pass  # Python < 3.7
+# # Set console encoding to UTF-8 if possible (Windows compatibility)
+# import sys
+# if sys.platform == 'win32':
+#     try:
+#         sys.stdout.reconfigure(encoding='utf-8')
+#     except AttributeError:
+#         pass  # Python < 3.7
 
 logger = logging.getLogger(__name__)
 
@@ -57,15 +56,63 @@ logging.getLogger('rag.vector_store').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('google').setLevel(logging.WARNING)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from api.routes import router, rag_store
+
+# Initialize rate limiter
+# Uses client IP address for rate limit tracking
+limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title="AniMiKyoku API",
     description="Anime poster identification with RAG + Gemini fallback",
     version="0.1.0"
 )
+
+# Attach limiter to app and register error handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
+
+# File upload size limit middleware (10MB)
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+
+@app.middleware("http")
+async def limit_upload_size(request: Request, call_next):
+    """
+    Enforce file upload size limit to prevent DoS attacks and memory exhaustion.
+    
+    Security Benefits:
+    - Prevents malicious clients from bypassing frontend 10MB limit
+    - Protects against memory exhaustion (CLIP loads full image into RAM)
+    - Mitigates disk space abuse
+    - Stops bandwidth consumption attacks
+    
+    Applied to: All multipart/form-data POST requests (file uploads)
+    """
+    if request.method == "POST":
+        content_type = request.headers.get("content-type", "")
+        if "multipart/form-data" in content_type:
+            content_length = request.headers.get("content-length")
+            if content_length:
+                size = int(content_length)
+                if size > MAX_UPLOAD_SIZE:
+                    logger.warning(
+                        f"[UPLOAD REJECTED] Size {size:,} bytes exceeds limit "
+                        f"{MAX_UPLOAD_SIZE:,} bytes from {request.client.host if request.client else 'unknown'}"
+                    )
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "detail": f"File too large. Maximum upload size is {MAX_UPLOAD_SIZE / (1024*1024):.0f}MB."
+                        }
+                    )
+    
+    return await call_next(request)
 
 # CORS configuration for React frontend (configurable via env)
 origins_env = os.getenv("ALLOW_ORIGINS")

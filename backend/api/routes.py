@@ -3,8 +3,10 @@ Main API router for anime poster identification
 Orchestrates RAG → Gemini fallback → AniList → AnimeThemes pipeline
 """
 import logging
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from typing import Dict, Any, List, Optional
 import base64
 import numpy as np
@@ -25,9 +27,13 @@ from services.animethemes_service import fetch_themes_from_api
 from rag.clip_embedder import generate_embedding
 from rag.vector_store import VectorStore
 from rag.ingestion import ingest_poster
+from utils.image_validation import validate_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Initialize rate limiter (same instance as main.py)
+limiter = Limiter(key_func=get_remote_address)
 
 # Initialize RAG vector store (global, loaded once at startup)
 # This loads the 223-vector index from disk (~457KB, <10ms)
@@ -181,7 +187,9 @@ async def identify_via_gemini(image_data: bytes, mime_type: str) -> str:
 
 
 @router.post("/identify")
+@limiter.limit("10/minute")
 async def identify_poster(
+    request: Request,
     file: UploadFile = File(...),
     force_rag: Optional[bool] = Query(False, description="Force RAG-only mode (no Gemini fallback, for testing)"),
     similarity_threshold: Optional[float] = Query(0.70, description="Minimum similarity for RAG match (0.0-1.0)")
@@ -189,7 +197,10 @@ async def identify_poster(
     """
     Main identification endpoint.
     
+    Rate Limit: 10 requests per minute per IP
+    
     Pipeline:
+    0. Validate image (format, dimensions, integrity)
     1. Try RAG-based identification (CLIP + FAISS)
     2. If RAG fails AND force_rag=False, fall back to Gemini
     3. Fetch anime info from AniList
@@ -220,6 +231,14 @@ async def identify_poster(
         mime_type = file.content_type or 'image/jpeg'
         
         logger.info(f"Received image upload: {file.filename} ({mime_type}, {len(image_data)} bytes)")
+        
+        # Step 0: Validate image before processing
+        is_valid, error_msg, img_metadata = validate_image(image_data)
+        if not is_valid:
+            logger.warning(f"Image validation failed: {error_msg}")
+            raise HTTPException(status_code=400, detail=error_msg)
+        
+        logger.info(f"Image validated: {img_metadata['width']}x{img_metadata['height']} {img_metadata['format']}")
         
         # Ensure threshold has a default value
         threshold = similarity_threshold if similarity_threshold is not None else 0.70
@@ -382,7 +401,9 @@ def merge_theme_data(api_themes: List[Dict], gemini_themes: List[Dict]) -> List[
 
 
 @router.post("/confirm-and-ingest")
+@limiter.limit("5/minute")
 async def confirm_and_ingest(
+    request: Request,
     file: UploadFile = File(...),
     confirmed_title: str = Query(..., description="User-confirmed anime title"),
     source: str = Query("gemini", description="Source of identification: 'gemini', 'user_correction', 'manual'"),
@@ -390,6 +411,8 @@ async def confirm_and_ingest(
 ) -> JSONResponse:
     """
     Confirm anime identification and add poster to RAG database.
+    
+    Rate Limit: 5 requests per minute per IP (stricter than identify)
     
     This endpoint is called when:
     1. User confirms a Gemini identification (adds new anime to RAG)
@@ -426,11 +449,18 @@ async def confirm_and_ingest(
         image_data = await file.read()
         file_ext = Path(file.filename or "image.jpg").suffix or ".jpg"
         
+        # Validate image before ingestion
+        is_valid, error_msg, img_metadata = validate_image(image_data)
+        if not is_valid:
+            logger.warning(f"[CONFIRM-INGEST] Validation failed: {error_msg}")
+            raise HTTPException(status_code=400, detail=f"Invalid image: {error_msg}")
+        
         # Parse save_image string to boolean
         save_image_bool = save_image.lower() in ('true', '1', 'yes')
         
         logger.info(f"[CONFIRM-INGEST] Received confirmation for: {confirmed_title}")
         logger.info(f"  File: {file.filename} ({len(image_data)} bytes)")
+        logger.info(f"  Image: {img_metadata['width']}x{img_metadata['height']} {img_metadata['format']}")
         logger.info(f"  Source: {source}")
         logger.info(f"  Save image: {save_image_bool}")
         
@@ -498,7 +528,8 @@ async def get_trending_anime() -> JSONResponse:
 
 
 @router.post("/youtube-search")
-async def search_youtube_video(request: Dict[str, str]) -> JSONResponse:
+@limiter.limit("20/minute")
+async def search_youtube_video(request: Request, request_body: Dict[str, str]) -> JSONResponse:
     """
     Search for YouTube video ID using Gemini.
     
@@ -511,7 +542,7 @@ async def search_youtube_video(request: Dict[str, str]) -> JSONResponse:
     try:
         from services.gemini_service import find_youtube_video_id
         
-        query = request.get('query')
+        query = request_body.get('query')
         if not query:
             raise HTTPException(status_code=400, detail="Query parameter is required")
         
@@ -641,6 +672,43 @@ async def verify_ingestion(
     except Exception as e:
         logger.error(f"Error verifying ingestion: {e}", exc_info=True)
         raise HTTPException(500, str(e))
+
+
+@router.post("/validate-image")
+@limiter.limit("30/minute")
+async def validate_image_endpoint(
+    request: Request,
+    file: UploadFile = File(...)
+) -> JSONResponse:
+    """
+    Validate an image without processing it.
+    
+    Useful for:
+    - Testing image uploads
+    - Pre-validation before identification
+    - Debugging upload issues
+    
+    Rate Limit: 30 requests per minute (lenient for testing)
+    
+    Returns:
+        JSON with validation result and metadata
+    """
+    try:
+        image_data = await file.read()
+        is_valid, error_msg, metadata = validate_image(image_data)
+        
+        return JSONResponse({
+            'success': is_valid,
+            'message': error_msg,
+            'metadata': metadata
+        })
+    except Exception as e:
+        logger.error(f"Error in validate-image: {e}", exc_info=True)
+        return JSONResponse({
+            'success': False,
+            'message': f"Validation error: {str(e)}",
+            'metadata': {}
+        }, status_code=500)
 
 
 @router.get("/health")
