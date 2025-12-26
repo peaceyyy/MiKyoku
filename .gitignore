@@ -1,6 +1,7 @@
 # Environments
 .env
 .env.*
+.vscode/
 
 # Dependencies
 /frontend/node_modules/
