@@ -78,6 +78,19 @@ Write-Host ""
 Write-Host "Press Ctrl+C to stop the server" -ForegroundColor Yellow
 Write-Host ""
 
-# Change to backend directory and run server
+# --- Start frontend (if present) in a separate PowerShell window ---
+$projectRoot = Get-Location
+$frontendPath = Join-Path $projectRoot "frontend"
+
+if (Test-Path $frontendPath) {
+    Write-Host "🚀 Starting frontend in a new PowerShell window..." -ForegroundColor Cyan
+    # Build the command to run in the new window. Use -NoExit so user can see logs.
+    $cmd = "Set-Location -Path '$frontendPath'; npm run dev"
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit", "-Command", $cmd -WorkingDirectory $frontendPath
+} else {
+    Write-Host "⚠️  Frontend folder not found at: $frontendPath" -ForegroundColor Yellow
+}
+
+# Change to backend directory and run server in current window
 Set-Location -Path ".\backend"
 python main.py

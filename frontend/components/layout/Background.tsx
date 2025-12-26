@@ -20,7 +20,7 @@ const Background: React.FC<BackgroundProps> = ({
           <div className="absolute inset-0 bg-[#050608] z-0"></div>
           <div className="absolute inset-0 bg-paper-texture z-0 opacity-20"></div>
           
-          {/* Ambient Glow */}
+          {/* Dynamic Ambient Glow */}
           <div 
             className="absolute top-[-20%] left-[-20%] right-[-20%] h-[150vh] z-0 transition-colors duration-1000 ease-in-out opacity-40 blur-[120px]"
             style={{
@@ -46,7 +46,7 @@ const Background: React.FC<BackgroundProps> = ({
             }}
           ></div>
 
-          {/* Subtle Floating Particles */}
+          {/* Subtle Floating Particles - More elegant than dots */}
           <div 
             className="absolute top-[15%] left-[20%] w-32 h-32 rounded-full opacity-20 blur-2xl transition-all duration-1000"
             style={{ 

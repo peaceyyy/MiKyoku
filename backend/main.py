@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 import os
 import logging
 from pathlib import Path
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 
 # Load environment variables FIRST before any other imports
 load_dotenv()
@@ -36,13 +38,6 @@ root_logger.setLevel(logging.INFO)
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
-# # Set console encoding to UTF-8 if possible (Windows compatibility)
-# import sys
-# if sys.platform == 'win32':
-#     try:
-#         sys.stdout.reconfigure(encoding='utf-8')
-#     except AttributeError:
-#         pass  # Python < 3.7
 
 logger = logging.getLogger(__name__)
 
@@ -59,24 +54,44 @@ logging.getLogger('google').setLevel(logging.WARNING)
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 from api.routes import router, rag_store
 
 # Initialize rate limiter
 # Uses client IP address for rate limit tracking
 limiter = Limiter(key_func=get_remote_address)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Replace deprecated @app.on_event('startup') / shutdown handlers."""
+    logger.info("="*60)
+    logger.info("[STARTUP] AniMiKyoku Backend Starting...")
+    logger.info("="*60)
+
+    if rag_store is not None:
+        logger.info(f"[OK] RAG System: OPERATIONAL")
+        logger.info(f"     - Index vectors: {rag_store.index.ntotal}")
+        logger.info(f"     - ID mappings: {len(rag_store.id_to_slug)}")
+        logger.info(f"     - Metadata entries: {len(rag_store.metadata)}")
+    else:
+        logger.warning("[WARNING] RAG System: NOT INITIALIZED (will fallback to Gemini only)")
+
+    logger.info("="*60)
+
+    try:
+        yield
+    finally:
+        logger.info("="*60)
+        logger.info("[SHUTDOWN] AniMiKyoku Backend Stopping...")
+        logger.info("="*60)
+
 app = FastAPI(
     title="AniMiKyoku API",
     description="Anime poster identification with RAG + Gemini fallback",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
-
-# Attach limiter to app and register error handler
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
 
 # File upload size limit middleware (10MB)
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
@@ -85,14 +100,7 @@ MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
 async def limit_upload_size(request: Request, call_next):
     """
     Enforce file upload size limit to prevent DoS attacks and memory exhaustion.
-    
-    Security Benefits:
-    - Prevents malicious clients from bypassing frontend 10MB limit
-    - Protects against memory exhaustion (CLIP loads full image into RAM)
-    - Mitigates disk space abuse
-    - Stops bandwidth consumption attacks
-    
-    Applied to: All multipart/form-data POST requests (file uploads)
+
     """
     if request.method == "POST":
         content_type = request.headers.get("content-type", "")
@@ -131,23 +139,6 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(router, prefix="/api")
-
-@app.on_event("startup")
-async def startup_event():
-    """Log startup information and RAG initialization status"""
-    logger.info("="*60)
-    logger.info("[STARTUP] AniMiKyoku Backend Starting...")
-    logger.info("="*60)
-    
-    if rag_store is not None:
-        logger.info(f"[OK] RAG System: OPERATIONAL")
-        logger.info(f"     - Index vectors: {rag_store.index.ntotal}")
-        logger.info(f"     - ID mappings: {len(rag_store.id_to_slug)}")
-        logger.info(f"     - Metadata entries: {len(rag_store.metadata)}")
-    else:
-        logger.warning("[WARNING] RAG System: NOT INITIALIZED (will fallback to Gemini only)")
-    
-    logger.info("="*60)
 
 @app.get("/")
 async def root():
