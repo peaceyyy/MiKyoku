@@ -1,4 +1,4 @@
-# AniMiKyoku
+# MiKyoku
 
 AniMiKyoku is a web application designed to identify an anime series from a provided poster image and retrieve its opening, ending, and original soundtrack theme music. It uses a combination of fast, local vector search and a powerful generative AI model to provide a responsive and accurate user experience.
 
