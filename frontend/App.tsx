@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import AnimeCard from './components/AnimeCard';
 import VideoPlayer from './components/VideoPlayer';
 import ConfirmIngestionDialog from './components/ConfirmIngestionDialog';
+import SearchAnimeDialog from './components/SearchAnimeDialog';
 import Background from './components/layout/Background';
 import Header from './components/layout/Header';
 import HeroSection from './components/layout/HeroSection';
@@ -14,6 +15,7 @@ import {
   searchYouTubeViaBackend,
   confirmAndIngest,
   verifyIngestion,
+  fetchThemesByTitle,
   IdentificationMode 
 } from './services/backendClient';
 import { AnimeInfo, AppState, SeasonCollection } from './types';
@@ -49,6 +51,10 @@ const App: React.FC = () => {
     source: 'gemini' | 'user_correction';
   } | null>(null);
   const [isIngesting, setIsIngesting] = useState<boolean>(false);
+  
+  // Search Dialog State
+  const [showSearchDialog, setShowSearchDialog] = useState<boolean>(false);
+  const [currentFileForCorrection, setCurrentFileForCorrection] = useState<File | null>(null);
   
   // Notification State
   const [successMessage, setSuccessMessage] = useState<string>("");
@@ -199,39 +205,97 @@ const App: React.FC = () => {
     if (!currentImage) return;
 
     try {
-      // Show overlay instead of changing page
-      setIsReidentifying(true);
-      setShowSuccessNotification(false);
-      
       // Convert current image back to File object
       const response = await fetch(currentImage);
       const blob = await response.blob();
       const file = new File([blob], 'report.jpg', { type: 'image/jpeg' });
 
+      // Store the file and show search dialog
+      setCurrentFileForCorrection(file);
+      setShowSearchDialog(true);
+
+    } catch (error: any) {
+      console.error("Error preparing correction:", error);
+      setErrorMsg(error.message || "Failed to prepare correction");
+    }
+  };
+
+  const handleSearchAnimeSelect = async (selectedTitle: string, animeData: any) => {
+    // Close search dialog
+    setShowSearchDialog(false);
+    
+    if (!currentFileForCorrection) return;
+
+    try {
+      // Show overlay while processing
+      setIsReidentifying(true);
+      setShowSuccessNotification(false);
+
+      // Update UI with manually selected anime from search (no re-identification!)
+      setIdentifiedTitle(selectedTitle);
+      setAnimeData(animeData);
+      
+      // Fetch themes for the selected title (no poster scanning needed)
+      const themes = await fetchThemesByTitle(selectedTitle);
+      setThemeData(themes);
+      setIdentificationMethod('gemini'); // Mark as manual correction
+
+      // Show ingestion dialog with user_correction source
+      setPendingIngestion({
+        file: currentFileForCorrection,
+        title: selectedTitle,
+        source: 'user_correction'
+      });
+      setShowIngestionDialog(true);
+
+    } catch (error: any) {
+      console.error("Error applying manual selection:", error);
+      setErrorMsg(error.message || "Failed to apply correction");
+    } finally {
+      setIsReidentifying(false);
+      setCurrentFileForCorrection(null);
+    }
+  };
+
+  const handleCancelSearch = () => {
+    setShowSearchDialog(false);
+    setCurrentFileForCorrection(null);
+  };
+
+  const handleUseGemini = async () => {
+    // Close search dialog
+    setShowSearchDialog(false);
+    
+    if (!currentFileForCorrection) return;
+
+    try {
+      // Show overlay while processing
+      setIsReidentifying(true);
+      setShowSuccessNotification(false);
+
       // Force Gemini identification
-      const result = await identifyPosterViaBackend(file, 'gemini-only');
+      const result = await identifyPosterViaBackend(currentFileForCorrection, 'gemini-only');
       
       // Update UI with new results (stay on same page)
       setIdentifiedTitle(result.identifiedTitle);
       setAnimeData(result.animeData);
       setThemeData(result.themeData);
       setIdentificationMethod(result.identificationMethod);
-      // appState stays as SUCCESS - don't change it
 
       // Show ingestion dialog with user_correction source
       setPendingIngestion({
-        file: file,
+        file: currentFileForCorrection,
         title: result.identifiedTitle,
         source: 'user_correction'
       });
       setShowIngestionDialog(true);
 
     } catch (error: any) {
-      console.error("Re-identification Error:", error);
-      setErrorMsg(error.message || "Failed to re-identify anime");
-      // Stay on results page but show error
+      console.error("Gemini Re-identification Error:", error);
+      setErrorMsg(error.message || "Failed to re-identify anime with Gemini");
     } finally {
       setIsReidentifying(false);
+      setCurrentFileForCorrection(null);
     }
   };
 
@@ -345,7 +409,7 @@ const App: React.FC = () => {
 
         {/* Footer */}
         <footer className="w-full text-center py-8 text-chill-stone/40 dark:text-zen-stone/100 text-[10px] uppercase tracking-[0.6em] dark:border-white/5 relative z-10 transition-colors duration-500">
-          <p>AniMiKyoku &copy; {new Date().getFullYear()} &mdash; BY HOMER ADRIEL DORIN</p>
+          <p>AniMiKyoku &copy; {new Date().getFullYear()} &mdash; PEACEYYY (HOME) </p>
         </footer>
 
         {/* Floating Video Player */}
@@ -356,6 +420,15 @@ const App: React.FC = () => {
           title={activeVideoMeta.title}
           artist={activeVideoMeta.artist}
           onClose={handleCloseVideo} 
+        />
+
+        {/* Search Anime Dialog */}
+        <SearchAnimeDialog
+          isOpen={showSearchDialog}
+          initialQuery={identifiedTitle}
+          onSelect={handleSearchAnimeSelect}
+          onCancel={handleCancelSearch}
+          onUseGemini={handleUseGemini}
         />
 
         {/* Ingestion Confirmation Dialog */}

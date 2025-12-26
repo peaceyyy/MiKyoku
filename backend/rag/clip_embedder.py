@@ -3,7 +3,6 @@ CLIP Embedder Module
 ====================
 Converts anime poster images into 512-dimensional embedding vectors using OpenAI's CLIP model.
 
-Key Concepts:
 - Embeddings: Numerical representations of images that capture visual features
 - ViT-B-32: Vision Transformer model with 32x32 patch size
 - Normalization: Ensures embeddings have unit length for cosine similarity
@@ -66,14 +65,6 @@ def load_clip_model(model_name: str = "ViT-B-32", pretrained: str = "openai"):
 async def generate_embedding(image: Union[bytes, Image.Image]) -> np.ndarray:
     """
     Generate a 512-dimensional embedding vector from an image.
-    
-    This is the core function that transforms a visual poster into searchable numbers.
-    
-    Args:
-        image: Either raw image bytes (from file upload) or PIL Image object
-    
-    Returns:
-        numpy array of shape (512,) with values normalized to unit length
         
     Example Output:
         array([0.234, -0.123, 0.567, ..., 0.890])  # 512 numbers
@@ -85,10 +76,6 @@ async def generate_embedding(image: Union[bytes, Image.Image]) -> np.ndarray:
         4. Run through CLIP encoder
         5. Normalize to unit length (for cosine similarity)
     
-    Technical Notes:
-        - Normalization formula: vector / ||vector||
-        - This makes cosine similarity = dot product
-        - Similar images will have vectors pointing in similar directions
     """
     # Load the cached model
     model, preprocess = load_clip_model()
@@ -134,23 +121,6 @@ def cosine_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
     """
     Calculate cosine similarity between two embeddings.
     
-    Since our embeddings are normalized (length = 1), cosine similarity
-    is simply the dot product of the two vectors.
-    
-    Args:
-        embedding1: First embedding (512,)
-        embedding2: Second embedding (512,)
-    
-    Returns:
-        Similarity score from -1 to 1:
-        - 1.0 = identical images
-        - 0.0 = completely unrelated
-        - -1.0 = opposite (rare in practice)
-    
-    Example:
-        same_poster_twice → similarity = 0.999 (near perfect)
-        steins_gate vs jujutsu_kaisen → similarity = 0.15 (different)
-        steins_gate vs steins_gate_variant → similarity = 0.85 (similar)
     """
     # Dot product of normalized vectors = cosine similarity
     similarity = np.dot(embedding1, embedding2)

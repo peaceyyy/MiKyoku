@@ -140,6 +140,76 @@ export async function fetchTrendingAnimeViaBackend(): Promise<any[]> {
 }
 
 /**
+ * Search for anime titles on AniList via backend
+ * 
+ * @param query - Search query (anime title or keywords)
+ * @param page - Page number for pagination (default: 1)
+ * @param perPage - Results per page (default: 10, max: 50)
+ * @returns Search results with anime data
+ */
+export async function searchAnimeViaBackend(
+  query: string,
+  page: number = 1,
+  perPage: number = 10
+): Promise<{
+  success: boolean;
+  pageInfo: any;
+  results: any[];
+}> {
+  try {
+    const response = await fetch(
+      `${BACKEND_URL}/api/search-anime?query=${encodeURIComponent(query)}&page=${page}&per_page=${perPage}`,
+      {
+        method: 'GET',
+      }
+    );
+
+    if (!response.ok) {
+      const errorData: BackendErrorResponse = await response.json().catch(() => ({
+        detail: `HTTP ${response.status}: ${response.statusText}`
+      }));
+      throw new Error(errorData.detail || 'Failed to search anime');
+    }
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('Error searching anime:', error);
+    throw new Error(error.message || 'Failed to search anime');
+  }
+}
+
+/**
+ * Fetch theme songs for a given anime title
+ * 
+ * @param title - Anime title to fetch themes for
+ * @returns Theme data collections
+ */
+export async function fetchThemesByTitle(title: string): Promise<any[]> {
+  try {
+    const response = await fetch(
+      `${BACKEND_URL}/api/fetch-themes?title=${encodeURIComponent(title)}`,
+      {
+        method: 'GET',
+      }
+    );
+
+    if (!response.ok) {
+      const errorData: BackendErrorResponse = await response.json().catch(() => ({
+        detail: `HTTP ${response.status}: ${response.statusText}`
+      }));
+      throw new Error(errorData.detail || 'Failed to fetch themes');
+    }
+
+    const data = await response.json();
+    return data.themeData || [];
+  } catch (error: any) {
+    console.error('Error fetching themes:', error);
+    // Return empty array instead of throwing to allow graceful degradation
+    return [];
+  }
+}
+
+/**
  * Search for YouTube video ID via backend
  * 
  * @param query - Search query (e.g., "Cyberpunk Edgerunners I Really Want to Stay at Your House")

@@ -19,7 +19,8 @@ from services.gemini_service import (
 )
 from services.anilist_service import (
     fetch_anime_info,
-    fetch_trending_anime
+    fetch_trending_anime,
+    search_anime
 )
 from services.animethemes_service import fetch_themes_from_api
 
@@ -36,13 +37,16 @@ router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 
 # Initialize RAG vector store (global, loaded once at startup)
-# This loads the 223-vector index from disk (~457KB, <10ms)
 from pathlib import Path
 import os
 
 # Get project root (backend/../ = project root)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+
+
+# On Render, set DATA_DIR_PATH to the mount path of the persistent disk (e.g., /data/animikyoku)
+DATA_DIR_PATH = os.getenv("DATA_DIR_PATH", str(PROJECT_ROOT / "data"))
+DATA_DIR = Path(DATA_DIR_PATH)
 
 try:
     rag_store = VectorStore(
@@ -70,29 +74,6 @@ async def identify_via_rag(
     3. Check top match against similarity threshold
     4. Return result if confident, otherwise indicate not found
     
-    Args:
-        image_data: Raw image bytes
-        mime_type: MIME type of the image
-        similarity_threshold: Minimum similarity to trust result (default: 0.70)
-            - 0.85+: Very confident match
-            - 0.70-0.85: Confident match (default)
-            - 0.50-0.70: Possible match (risky)
-            - <0.50: Not confident, use Gemini
-    
-    Returns:
-        Dictionary with:
-        - 'found': bool - Whether a confident match was found
-        - 'anime_title': str - Title if found
-        - 'slug': str - Slug if found
-        - 'similarity': float - Similarity score if found
-        - 'top_matches': List[Dict] - Top 3 matches for debugging
-    
-    Mathematical Insight:
-    ---------------------
-    FAISS IndexFlatIP searches ALL 223 vectors in <1ms.
-    The threshold determines: "Do we TRUST the top result?"
-    
-    Even if no match exists, FAISS still returns the "closest" vector.
     Example: Upload "One Piece" poster (not in DB)
       → FAISS might return "Attack on Titan" with similarity 0.35
       → Threshold rejects it (0.35 < 0.70)
@@ -158,7 +139,7 @@ async def identify_via_rag(
 
 async def identify_via_gemini(image_data: bytes, mime_type: str) -> str:
     """
-    Fallback: Identify anime using Gemini vision model.
+    Fallback: Identify anime using Gemini.
     
     Args:
         image_data: Raw image bytes
@@ -188,8 +169,7 @@ async def identify_via_gemini(image_data: bytes, mime_type: str) -> str:
 
 @router.post("/identify")
 @limiter.limit("10/minute")
-async def identify_poster(
-    request: Request,
+async def identify_poster(  
     file: UploadFile = File(...),
     force_rag: Optional[bool] = Query(False, description="Force RAG-only mode (no Gemini fallback, for testing)"),
     similarity_threshold: Optional[float] = Query(0.70, description="Minimum similarity for RAG match (0.0-1.0)")
@@ -198,15 +178,6 @@ async def identify_poster(
     Main identification endpoint.
     
     Rate Limit: 10 requests per minute per IP
-    
-    Pipeline:
-    0. Validate image (format, dimensions, integrity)
-    1. Try RAG-based identification (CLIP + FAISS)
-    2. If RAG fails AND force_rag=False, fall back to Gemini
-    3. Fetch anime info from AniList
-    4. Fetch themes from AnimeThemes API
-    5. Supplement with Gemini themes (OSTs)
-    6. Return unified response
     
     Request:
         - file: Image file (poster/screenshot)
@@ -524,6 +495,110 @@ async def get_trending_anime() -> JSONResponse:
         return JSONResponse({'success': True, 'data': trending})
     except Exception as e:
         logger.error(f"Error fetching trending: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/search-anime")
+@limiter.limit("30/minute")
+async def search_anime_endpoint(
+    request: Request,
+    query: str = Query(..., description="Search query for anime titles"),
+    page: int = Query(1, description="Page number", ge=1),
+    per_page: int = Query(10, description="Results per page", ge=1, le=50)
+) -> JSONResponse:
+    """
+    Search for anime titles on AniList.
+    
+    This endpoint is used when users report an incorrect identification
+    and want to manually search for the correct anime.
+    
+    Rate Limit: 30 requests per minute per IP
+    
+    Args:
+        query: Search query string (anime title or keywords)
+        page: Page number for pagination (default: 1)
+        per_page: Number of results per page (default: 10, max: 50)
+    
+    Returns:
+        JSON with:
+        - success: bool
+        - pageInfo: Pagination metadata (total, currentPage, hasNextPage, etc.)
+        - results: List of anime matching the search query
+    
+    Example:
+        GET /api/search-anime?query=attack+on+titan&per_page=5
+    """
+    try:
+        if not query or len(query.strip()) == 0:
+            raise HTTPException(status_code=400, detail="Search query cannot be empty")
+        
+        logger.info(f"[SEARCH-ANIME] Query: '{query}' (page={page}, per_page={per_page})")
+        
+        result = await search_anime(query.strip(), page=page, per_page=per_page)
+        
+        logger.info(f"[SEARCH-ANIME] Found {len(result.get('results', []))} results")
+        
+        return JSONResponse({
+            'success': True,
+            'pageInfo': result.get('pageInfo', {}),
+            'results': result.get('results', [])
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in search-anime: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/fetch-themes")
+@limiter.limit("30/minute")
+async def fetch_themes_by_title(
+    request: Request,
+    title: str = Query(..., description="Anime title to fetch themes for")
+) -> JSONResponse:
+    """
+    Fetch theme songs for a given anime title without re-identifying.
+    
+    This endpoint is used when the user manually selects an anime from search
+    and we just need to fetch the themes without re-scanning the poster.
+    
+    Rate Limit: 30 requests per minute per IP
+    
+    Args:
+        title: The anime title to fetch themes for
+    
+    Returns:
+        JSON with:
+        - success: bool
+        - themeData: Combined themes from AnimeThemes API + Gemini
+    
+    Example:
+        GET /api/fetch-themes?title=Attack+on+Titan
+    """
+    try:
+        if not title or len(title.strip()) == 0:
+            raise HTTPException(status_code=400, detail="Title cannot be empty")
+        
+        logger.info(f"[FETCH-THEMES] Fetching themes for: '{title}'")
+        
+        # Fetch themes from both sources
+        api_themes, gemini_themes = await fetch_themes_parallel(title.strip())
+        
+        # Merge themes
+        merged_themes = merge_theme_data(api_themes, gemini_themes)
+        
+        logger.info(f"[FETCH-THEMES] Retrieved {len(merged_themes)} theme collections")
+        
+        return JSONResponse({
+            'success': True,
+            'themeData': merged_themes
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in fetch-themes: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

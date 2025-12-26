@@ -9,11 +9,6 @@ Security Checks:
 - Dimension limits (prevents 1x1 pixels or 50000x50000 attacks)
 - File integrity (catches corrupted images early)
 
-Why This Matters:
-- Prevents processing of malicious files
-- Saves CLIP embedding time on invalid inputs
-- Protects against memory exhaustion from extreme dimensions
-- Provides clear error messages to users
 """
 
 from PIL import Image
