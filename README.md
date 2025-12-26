@@ -2,16 +2,18 @@
 
 AniMiKyoku is a web application designed to identify an anime series from a provided poster image and retrieve its opening, ending, and original soundtrack theme music. It uses a combination of fast, local vector search and a powerful generative AI model to provide a responsive and accurate user experience.
 
+*Last Updated: 12/26/2025*
+
 ## Features
 
 - **Image-Based Identification:** Users can upload an anime poster or screenshot to identify the series.
 - **Hybrid Identification System:**
   - A fast initial search is performed using a local RAG (Retrieval-Augmented Generation) pipeline, which uses CLIP embeddings and a FAISS vector store for near-instant identification of known posters.
-  - If the RAG pipeline is not confident in the result, the system falls back to the Google Gemini vision model for a more comprehensive analysis.
+  - If the RAG pipeline is not confident in the result, the system falls back to the Google Gemini vision model to identify the image. If this fails, users have the option to manually search the correct Anime.
 - **Theme Music Retrieval:** Once identified, the application fetches theme song data from the AnimeThemes API and supplements it with OSTs identified by Gemini.
 - **Interactive Music Player:** Users can search for and listen to theme songs directly in the browser via an embedded YouTube player.
 - **Community-Driven Database:** When a new anime is identified via Gemini, users can confirm the result to "ingest" the poster into the local RAG database, making future identifications faster for everyone.
-- **Anime Discovery:** Includes features to browse currently trending anime from AniList.
+- **Anime Discovery:** The OSTs of the Top 5 Anime of the week are displayed in the upload page because of the following purpose: "Because why not?"
 
 ## Technology Stack
 
@@ -20,7 +22,7 @@ AniMiKyoku is a web application designed to identify an anime series from a prov
 - **Framework:** React
 - **Build Tool:** Vite
 - **Language:** TypeScript
-- **Styling:** CSS (PostCSS)
+- **Styling:** CSS 
 
 ### Backend
 
@@ -31,7 +33,7 @@ AniMiKyoku is a web application designed to identify an anime series from a prov
 
 ### AI
 
-- **Generative AI:** Google Gemini Pro Vision
+- **Cloud LLM (for fallback identification):** Gemini 2.5 Flash 
 - **Vector Embeddings:** CLIP
 - **Vector Store:** Facebook AI Similarity Search (FAISS)
 
@@ -49,7 +51,7 @@ These instructions will get you a copy of the project up and running on your loc
 
 - Git
 - Node.js and npm
-- Conda (or Miniconda/Anaconda)
+- Conda (or Miniconda/Anaconda) — I used Mamba
 
 ### Installation
 
