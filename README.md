@@ -2,7 +2,7 @@
 
 AniMiKyoku is a web application designed to identify an anime series from a provided poster image and retrieve its opening, ending, and original soundtrack theme music. It uses a combination of fast, local vector search and a powerful generative AI model to provide a responsive and accurate user experience.
 
-*Last Updated: 12/26/2025*
+*Last Updated: 12/267/2025*
 
 ## Features
 
@@ -20,20 +20,17 @@ AniMiKyoku is a web application designed to identify an anime series from a prov
 ### Frontend
 
 - **Framework:** React
-- **Build Tool:** Vite
 - **Language:** TypeScript
-- **Styling:** CSS 
+- **Styling:** CSS
 
 ### Backend
 
-- **Framework:** FastAPI
-- **Language:** Python
-- **Environment:** Conda
+- **Framework:** Python/FastAPI
 - **Web Server:** Uvicorn
 
 ### AI
 
-- **Cloud LLM (for fallback identification):** Gemini 2.5 Flash 
+- **Cloud LLM (for fallback identification):** Gemini 2.5 Flash
 - **Vector Embeddings:** CLIP
 - **Vector Store:** Facebook AI Similarity Search (FAISS)
 
@@ -111,7 +108,6 @@ You will need to run the frontend and backend in two separate terminal windows.
   cd backend
   python main.py
   ```
-
   The backend will be running at `http://localhost:8000`.
 - **Terminal 2: Start the Frontend**
 
@@ -119,5 +115,4 @@ You will need to run the frontend and backend in two separate terminal windows.
   cd frontend
   npm run dev
   ```
-
   The frontend will be accessible at `http://localhost:5173`.
