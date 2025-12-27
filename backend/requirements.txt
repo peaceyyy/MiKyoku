@@ -1,0 +1,30 @@
+# Core FastAPI and server
+fastapi
+uvicorn[standard]
+python-multipart
+httpx
+requests
+python-dotenv
+slowapi
+
+# Image and data processing
+Pillow
+tqdm
+rapidfuzz
+numpy
+
+# PyTorch and FAISS 
+torchvision
+torchaudio
+faiss-cpu
+
+# CLIP model dependencies
+open-clip-torch
+ftfy
+regex
+
+# Google Gemini
+google-genai
+
+# Concurrency utility
+portalocker

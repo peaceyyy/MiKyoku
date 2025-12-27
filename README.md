@@ -1,118 +1,49 @@
-# MiKyoku
+# AniMiKyoku: Anime Poster to OP/ED Retrieval Tool
 
-AniMiKyoku is a web application designed to identify an anime series from a provided poster image and retrieve its opening, ending, and original soundtrack theme music. It uses a combination of fast, local vector search and a powerful generative AI model to provide a responsive and accurate user experience.
+AniMiKyoku is a lightweight tool that takes a single anime poster image as input and returns all associated opening and ending songs. It uses a combination of image embedding similarity and AniList metadata to quickly and accurately find anime theme music.
 
-*Last Updated: 12/267/2025*
+## Core Features
 
-## Features
+*   **Image-Based Identification:** Identify an anime from a poster image.
+*   **Theme Song Retrieval:** Fetches all opening and ending themes for a given anime series, including all seasons.
+*   **Local Vector Database:** Uses a local FAISS index for fast and offline similarity search.
+*   **Metadata Integration:** Pulls detailed anime metadata from the AniList API.
+*   **Automatic Database Expansion:** Can automatically add new, unrecognized posters to its local database.
 
-- **Image-Based Identification:** Users can upload an anime poster or screenshot to identify the series.
-- **Hybrid Identification System:**
-  - A fast initial search is performed using a local RAG (Retrieval-Augmented Generation) pipeline, which uses CLIP embeddings and a FAISS vector store for near-instant identification of known posters.
-  - If the RAG pipeline is not confident in the result, the system falls back to the Google Gemini vision model to identify the image. If this fails, users have the option to manually search the correct Anime.
-- **Theme Music Retrieval:** Once identified, the application fetches theme song data from the AnimeThemes API and supplements it with OSTs identified by Gemini.
-- **Interactive Music Player:** Users can search for and listen to theme songs directly in the browser via an embedded YouTube player.
-- **Community-Driven Database:** When a new anime is identified via Gemini, users can confirm the result to "ingest" the poster into the local RAG database, making future identifications faster for everyone.
-- **Anime Discovery:** The OSTs of the Top 5 Anime of the week are displayed in the upload page because of the following purpose: "Because why not?"
+## Tech Stack
 
-## Technology Stack
-
-### Frontend
-
-- **Framework:** React
-- **Language:** TypeScript
-- **Styling:** CSS
-
-### Backend
-
-- **Framework:** Python/FastAPI
-- **Web Server:** Uvicorn
-
-### AI
-
-- **Cloud LLM (for fallback identification):** Gemini 2.5 Flash
-- **Vector Embeddings:** CLIP
-- **Vector Store:** Facebook AI Similarity Search (FAISS)
-
-### External Services
-
-- **Anime Metadata:** [AniList API](httpss://anilist.gitbook.io/anilist-apiv2-docs/)
-- **Theme Song Data:** [AnimeThemes.moe API](httpss://animethemes.docs.apiary.io/)
-- **Music Source:** YouTube
+*   **Frontend:** React, TypeScript, Vite
+*   **Backend:** Python, FastAPI
+*   **Machine Learning:** CLIP for image embeddings, FAISS for vector search.
 
 ## Getting Started
 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
-
 ### Prerequisites
 
-- Git
-- Node.js and npm
-- Conda (or Miniconda/Anaconda) — I used Mamba
+*   Conda (for backend Python environment)
+*   Node.js and npm (for frontend)
 
-### Installation
+### Installation and Running
 
-1. **Clone the repository:**
+1.  **Backend Setup:**
+    *   Navigate to the `backend` directory.
+    *   Create the conda environment: `conda env create -f environment.yml`
+    *   Activate the environment: `conda activate animikyoku`
+    *   Start the backend server: `python main.py`
 
-   ```sh
-   git clone <your-repository-url>
-   cd AniMiKyoku
-   ```
-2. **Configure Environment Variables:**
+2.  **Frontend Setup:**
+    *   Navigate to the `frontend` directory.
+    *   Install dependencies: `npm install`
+    *   Start the frontend development server: `npm run dev`
 
-   - Navigate to the `backend` directory.
-   - Copy the `.env.example` file to a new file named `.env`.
-   - Open the `.env` file and add your Google Gemini API key:
-     ```
-     GEMINI_API_KEY="your_api_key_here"
-     ```
-3. **Frontend Setup:**
+3.  **Running the Application:**
+    *   Alternatively, you can use the `start-program.ps1` script in the root directory to start both backend and frontend servers.
 
-   ```sh
-   cd frontend
-   npm install
-   ```
-4. **Backend Setup:**
+## Project Structure
 
-   - Ensure your Conda environment is active.
-   - Create the Conda environment from the `environment.yml` file. This will install all necessary Python packages.
+The project is divided into two main components:
 
-   ```sh
-   conda env create -f environment.yml
-   conda activate animikyoku
-   ```
+*   `/frontend`: Contains the React-based user interface for uploading images and viewing results.
+*   `/backend`: Houses the FastAPI server, which handles image processing, embedding, similarity search, and communication with the AniList API.
 
-### Running the Application
-
-#### For Windows Users
-
-A PowerShell script is provided to automate the startup process.
-
-1. Open PowerShell in the project root directory.
-2. Run the script:
-
-   ```powershell
-   .\start-program.ps1
-   ```
-
-   This will install any missing dependencies and start both the frontend and backend servers in separate windows.
-
-#### For macOS / Linux Users
-
-You will need to run the frontend and backend in two separate terminal windows.
-
-- **Terminal 1: Start the Backend**
-
-  ```sh
-  conda activate animikyoku
-  cd backend
-  python main.py
-  ```
-  The backend will be running at `http://localhost:8000`.
-- **Terminal 2: Start the Frontend**
-
-  ```sh
-  cd frontend
-  npm run dev
-  ```
-  The frontend will be accessible at `http://localhost:5173`.
+The core logic for the retrieval-augmented generation (RAG) is located in `backend/rag/`. This includes the CLIP embedder, FAISS vector store, and ingestion pipeline.

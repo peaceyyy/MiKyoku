@@ -1,4 +1,4 @@
-name: AniMiKyoku
+name: animikyoku
 channels:
   - pytorch
   - nvidia

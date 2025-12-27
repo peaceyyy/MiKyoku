@@ -1,0 +1,19 @@
+# flyctl launch added from .gitignore
+# Environments
+**\.env
+**\.env.*
+**\.vscode
+
+# Dependencies
+frontend\node_modules
+backend\__pycache__
+backend\logs
+
+# Build artifacts
+dist
+build
+
+# Data files and indexes - should not be committed
+# data
+**\docs
+fly.toml
