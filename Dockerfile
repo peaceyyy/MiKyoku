@@ -26,4 +26,4 @@ EXPOSE 8000
 
 # Define the command to run the application
 # The port will be set by Fly.io's PORT environment variable
-CMD ["conda", "run", "-n", "animikyoku", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-lc", "conda run -n animikyoku uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
