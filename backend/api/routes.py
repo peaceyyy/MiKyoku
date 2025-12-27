@@ -36,28 +36,43 @@ router = APIRouter()
 # Initialize rate limiter (same instance as main.py)
 limiter = Limiter(key_func=get_remote_address)
 
-# Initialize RAG vector store (global, loaded once at startup)
+# RAG store will be initialized lazily during application startup to avoid
+# performing heavy I/O / model loads at import time (which can crash process
+# startup on platforms like Fly where imports must be fast).
 from pathlib import Path
 import os
+from typing import Optional
 
 # Get project root (backend/../ = project root)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
-
-# On Render, set DATA_DIR_PATH to the mount path of the persistent disk (e.g., /data/animikyoku)
+# On Render / Fly, set DATA_DIR_PATH to the mount path of the persistent disk
+# (e.g., /data/animikyoku). Keep default to local `data/` for development.
 DATA_DIR_PATH = os.getenv("DATA_DIR_PATH", str(PROJECT_ROOT / "data"))
 DATA_DIR = Path(DATA_DIR_PATH)
 
-try:
-    rag_store = VectorStore(
-        index_path=str(DATA_DIR / "index.faiss"),
-        metadata_path=str(DATA_DIR / "posters.json"),
-        dimension=512
-    )
-    logger.info(f"[OK] RAG vector store initialized: {rag_store.index.ntotal} vectors loaded")
-except Exception as e:
-    logger.error(f"[ERROR] Failed to initialize RAG store: {e}")
-    rag_store = None
+# Placeholder for the VectorStore instance. Use `initialize_rag()` from
+# application startup to populate this value.
+rag_store: Optional[VectorStore] = None
+
+
+def initialize_rag():
+    """Initialize the global `rag_store` instance.
+
+    This is safe to call multiple times; if initialization fails the
+    function will log the error and leave `rag_store` as ``None``.
+    """
+    global rag_store
+    try:
+        rag_store = VectorStore(
+            index_path=str(DATA_DIR / "index.faiss"),
+            metadata_path=str(DATA_DIR / "posters.json"),
+            dimension=512,
+        )
+        logger.info(f"[OK] RAG vector store initialized: {rag_store.index.ntotal} vectors loaded")
+    except Exception as e:
+        logger.error(f"[ERROR] Failed to initialize RAG store: {e}", exc_info=True)
+        rag_store = None
 
 
 async def identify_via_rag(

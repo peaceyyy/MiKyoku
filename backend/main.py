@@ -56,7 +56,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from api.routes import router, rag_store
+import api.routes as routes
 
 # Initialize rate limiter
 # Uses client IP address for rate limit tracking
@@ -69,11 +69,17 @@ async def lifespan(app: FastAPI):
     logger.info("[STARTUP] AniMiKyoku Backend Starting...")
     logger.info("="*60)
 
-    if rag_store is not None:
+    # Initialize RAG store lazily at startup (may perform I/O/model loads)
+    try:
+        routes.initialize_rag()
+    except Exception:
+        logger.exception("Exception while initializing RAG store")
+
+    if routes.rag_store is not None:
         logger.info(f"[OK] RAG System: OPERATIONAL")
-        logger.info(f"     - Index vectors: {rag_store.index.ntotal}")
-        logger.info(f"     - ID mappings: {len(rag_store.id_to_slug)}")
-        logger.info(f"     - Metadata entries: {len(rag_store.metadata)}")
+        logger.info(f"     - Index vectors: {routes.rag_store.index.ntotal}")
+        logger.info(f"     - ID mappings: {len(routes.rag_store.id_to_slug)}")
+        logger.info(f"     - Metadata entries: {len(routes.rag_store.metadata)}")
     else:
         logger.warning("[WARNING] RAG System: NOT INITIALIZED (will fallback to Gemini only)")
 
@@ -138,12 +144,12 @@ app.add_middleware(
 )
 
 # Include API routes
-app.include_router(router, prefix="/api")
+app.include_router(routes.router, prefix="/api")
 
 @app.get("/")
 async def root():
-    rag_status = "operational" if rag_store else "unavailable"
-    rag_count = rag_store.index.ntotal if rag_store else 0
+    rag_status = "operational" if routes.rag_store else "unavailable"
+    rag_count = routes.rag_store.index.ntotal if routes.rag_store else 0
     
     return {
         "message": "AniMiKyoku API is running",
