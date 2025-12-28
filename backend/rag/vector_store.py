@@ -3,15 +3,6 @@ FAISS Vector Store Module
 ==========================
 Manages fast similarity search for anime poster embeddings using FAISS.
 
-Key Concepts:
-- Vector Space: 512-dimensional space where each anime poster is a point
-- Cosine Similarity: Measures angle between vectors (1.0 = identical, 0.0 = orthogonal)
-- FAISS Index: Optimized data structure for fast nearest-neighbor search
-- Inner Product: Dot product of normalized vectors = cosine similarity
-
-Mathematical Background:
-------------------------
-Given two normalized embeddings A and B (||A|| = ||B|| = 1):
 
     cosine_similarity(A, B) = cos(θ) = A · B = Σ(aᵢ × bᵢ)
     

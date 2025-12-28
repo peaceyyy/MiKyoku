@@ -42,8 +42,6 @@ async def build_embeddings(force_regenerate: bool = False):
     Args:
         force_regenerate: If True, regenerate all embeddings even if they exist
     
-    Process Explanation:
-    --------------------
     1. Pre-load CLIP model (expensive one-time operation)
     2. Load existing metadata from posters.json
     3. Match poster files with metadata entries
