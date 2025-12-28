@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 import base64
 import numpy as np
 from pathlib import Path
+import shutil
 
 from services.gemini_service import (
     identify_anime_from_poster,
@@ -50,11 +51,36 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 # (e.g., /data/animikyoku). Keep default to local `data/` for development.
 DATA_DIR_PATH = os.getenv("DATA_DIR_PATH", str(PROJECT_ROOT / "data"))
 DATA_DIR = Path(DATA_DIR_PATH)
+INITIAL_DATA_DIR = Path(os.getenv("INITIAL_DATA_DIR", "/app/data_initial"))
 
 # Placeholder for the VectorStore instance. Use `initialize_rag()` from
 # application startup to populate this value.
 rag_store: Optional[VectorStore] = None
 
+
+def ensure_data_initialized() -> None:
+    """Ensure the mounted data directory has the required files.
+
+    On platforms like Fly.io, a persistent volume mounted at /app/data may
+    start empty on first boot and hide image-bundled files. This function
+    copies the initial dataset from 
+    ``/app/data_initial`` → ``/app/data`` if ``posters.json`` is missing.
+    """
+    try:
+        posters_path = DATA_DIR / "posters.json"
+        if not posters_path.exists() and (INITIAL_DATA_DIR / "posters.json").exists():
+            logger.info("[INIT] Volume missing posters.json — copying initial data to /app/data")
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            for item in INITIAL_DATA_DIR.iterdir():
+                target = DATA_DIR / item.name
+                if item.is_dir():
+                    if not target.exists():
+                        shutil.copytree(item, target)
+                else:
+                    shutil.copy2(item, target)
+            logger.info("[INIT] Initial data copy complete")
+    except Exception as e:
+        logger.error(f"[INIT ERROR] Failed to ensure data initialization: {e}", exc_info=True)
 
 def initialize_rag():
     """Initialize the global `rag_store` instance.
@@ -64,6 +90,8 @@ def initialize_rag():
     """
     global rag_store
     try:
+        # Fail-safe: ensure the data directory has initial contents
+        ensure_data_initialized()
         rag_store = VectorStore(
             index_path=str(DATA_DIR / "index.faiss"),
             metadata_path=str(DATA_DIR / "posters.json"),
