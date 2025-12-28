@@ -20,7 +20,16 @@ primary_region = 'fra'
   processes = ['app']
 
 [[vm]]
-  memory = '1gb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
   memory_mb = 1024
+
+# Persistent volume for posters, embeddings, and FAISS index
+# This ensures user uploads persist across deployments and restarts
+[[mounts]]
+  source = "data"
+  destination = "/app/data"
+  
+[env]
+  DATA_DIR_PATH = "/app/data"

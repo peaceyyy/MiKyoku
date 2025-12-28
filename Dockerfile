@@ -32,11 +32,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY backend/ .
 
-# Copy data (optional; persistent volumes on Fly can override)
-COPY data/ ./data
+# Copy the init-data script
+COPY backend/init-data.sh /usr/local/bin/init-data.sh
+RUN chmod +x /usr/local/bin/init-data.sh
+
+# Copy initial data to a non-mounted location
+COPY data/ ./data_initial
 
 # Expose port
 EXPOSE 8000
 
-# Run using simple uvicorn command; let Fly supply $PORT
-CMD ["sh", "-lc", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run the initialization script then start the app
+CMD ["init-data.sh"]
