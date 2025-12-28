@@ -184,7 +184,8 @@ async def identify_via_gemini(image_data: bytes, mime_type: str) -> str:
 
 @router.post("/identify")
 @limiter.limit("10/minute")
-async def identify_poster(  
+async def identify_poster(
+    request: Request,
     file: UploadFile = File(...),
     force_rag: Optional[bool] = Query(False, description="Force RAG-only mode (no Gemini fallback, for testing)"),
     similarity_threshold: Optional[float] = Query(0.70, description="Minimum similarity for RAG match (0.0-1.0)")
