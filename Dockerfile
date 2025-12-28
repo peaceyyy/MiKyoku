@@ -1,29 +1,42 @@
-# Use an official Miniconda image as a parent image
-FROM continuumio/miniconda3:latest
+FROM python:3.12-slim
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy the environment file to the working directory
-COPY environment.yml .
+# Prevent generation of .pyc files and enable stdout/stderr flush
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Create the conda environment from the environment.yml file
-# This will install all necessary packages including pytorch, faiss-cpu, etc.
-RUN conda env create -f environment.yml
+# Copy requirements and install system deps needed for some wheels
+COPY requirements.txt ./
 
-# Make RUN commands use the new environment:
-SHELL ["conda", "run", "-n", "animikyoku", "/bin/bash", "-c"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+		build-essential \
+		git \
+		ca-certificates \
+		libsndfile1 \
+		libgl1 \
+		libglib2.0-0 \
+		libsm6 \
+		libxext6 \
+		libxrender1 \
+	&& rm -rf /var/lib/apt/lists/*
 
-# Copy the rest of the backend application code
+# Upgrade pip and install PyTorch CPU wheels first (smaller than full CUDA)
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
+
+# Install remaining Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
 COPY backend/ .
 
-# Copy the initial data directory into the image
-# This will be overwritten by the persistent disk on Fly.io, but is good for base state
+# Copy data (optional; persistent volumes on Fly can override)
 COPY data/ ./data
 
-# Expose the port the app runs on
+# Expose port
 EXPOSE 8000
 
-# Define the command to run the application
-# The port will be set by Fly.io's PORT environment variable
-CMD ["sh", "-lc", "conda run -n animikyoku uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run using simple uvicorn command; let Fly supply $PORT
+CMD ["sh", "-lc", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

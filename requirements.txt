@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+python-multipart
+httpx
+pillow
+tqdm
+rapidfuzz
+requests
+python-dotenv
+numpy
+open-clip-torch
+ftfy
+regex
+google-genai
+portalocker
+slowapi
+faiss-cpu
