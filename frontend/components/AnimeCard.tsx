@@ -203,7 +203,7 @@ const AnimeCard: React.FC<AnimeCardProps> = ({
                  <ThemeList themes={themeData} animeTitle={title} onPlayVideo={onPlayVideo} />
              ) : (
                  <div className="text-center py-8 text-chill-stone/50 dark:text-zen-stone/50 text-sm">
-                     No soundtrack information available in the archives.
+                     No soundtrack information available.
                  </div>
              )}
         </div>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import FileUpload from '../FileUpload';
 import { AppState } from '../../types';
 
@@ -17,6 +17,36 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   onFileSelect,
   onReset
 }) => {
+  const [msgIndex, setMsgIndex] = useState(0);
+
+  const analyzingMessages = [
+    'Consulting the stars...',
+    'Reading ancient anime logs...',
+    'Tuning into opening theme frequencies...',
+    'Aligning frames with memory banks...'
+  ];
+
+  const fetchingMessages = [
+    'Retrieving archives...',
+    'Summoning soundtrack records...',
+    'Cross-referencing episode guides...',
+    'Downloading nostalgic vibes...'
+  ];
+
+  useEffect(() => {
+    const active = (appState === AppState.ANALYZING || appState === AppState.FETCHING_INFO);
+    const messages = appState === AppState.ANALYZING ? analyzingMessages : fetchingMessages;
+    if (!active) {
+      setMsgIndex(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setMsgIndex(i => (i + 1) % messages.length);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [appState]);
   return (
     <div className="w-full max-w-5xl relative">
       {/* Vertical Text Decoration */}

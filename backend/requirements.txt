@@ -23,8 +23,9 @@ open-clip-torch
 ftfy
 regex
 
-# Google Gemini
+# Google 
 google-genai
+google-api-python-client
 
 # Concurrency utility
 portalocker

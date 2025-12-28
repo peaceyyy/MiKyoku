@@ -9,7 +9,8 @@ primary_region = 'fra'
 [build]
 
 [processes]
-  app = "sh -lc 'uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}'"
+  # Use init-data script to ensure volume is populated, then start uvicorn
+  app = "init-data.sh"
 
 [http_service]
   internal_port = 8000
@@ -20,10 +21,10 @@ primary_region = 'fra'
   processes = ['app']
 
 [[vm]]
-  memory = '512mb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 1024
+  
 
 # Persistent volume for posters, embeddings, and FAISS index
 # This ensures user uploads persist across deployments and restarts

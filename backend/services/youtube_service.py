@@ -4,7 +4,7 @@ Primary search method with Gemini as fallback.
 """
 import os
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
