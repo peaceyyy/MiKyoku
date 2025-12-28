@@ -5,7 +5,8 @@
  * Replaces direct calls to Gemini, AniList, and AnimeThemes services.
  */
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+// Normalize backend URL: remove any trailing slashes to avoid "//api/..." 404s
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
 export type IdentificationMode = 'hybrid' | 'rag-only' | 'gemini-only';
 

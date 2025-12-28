@@ -10,17 +10,21 @@ INITIAL_DATA_PATH="/app/data_initial"
 POSTERS_JSON="${MOUNT_PATH}/posters.json"
 
 echo "Checking for initial data on volume at ${MOUNT_PATH}..."
+ls -la "${MOUNT_PATH}"
 
 if [ ! -f "$POSTERS_JSON" ]; then
-  echo "Volume appears empty. Initializing data from ${INITIAL_DATA_PATH}..."
+  echo "Volume appears empty or missing posters.json. Initializing data from ${INITIAL_DATA_PATH}..."
   # Ensure the destination directory exists
   mkdir -p "${MOUNT_PATH}/posters"
   # Copy the initial data, preserving directory structure
   cp -Rv "${INITIAL_DATA_PATH}/." "${MOUNT_PATH}/"
   echo "Data initialization complete."
+  ls -la "${MOUNT_PATH}"
 else
   echo "Volume contains data. Skipping initialization."
+  ls -la "${MOUNT_PATH}"
 fi
 
 # Execute the main application command
-exec sh -lc "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
+echo "Starting uvicorn..."
+exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
