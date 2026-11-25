@@ -83,6 +83,15 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("[WARNING] RAG System: NOT INITIALIZED (will fallback to Gemini only)")
 
+    # Warm up CLIP model at startup to avoid first-request latency
+    try:
+        logger.info("[STARTUP] Warming up CLIP model...")
+        from rag.clip_embedder import warm_up_model
+        await warm_up_model()
+        logger.info("[OK] CLIP model warmed up and ready")
+    except Exception as e:
+        logger.error(f"[WARNING] CLIP model warm-up failed: {e}")
+
     logger.info("="*60)
 
     try:
@@ -98,6 +107,25 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan
 )
+
+# Health check endpoint (prevents platform cold starts)
+@app.get("/health")
+async def health_check():
+    """Simple health check for load balancers and monitoring."""
+    return {
+        "status": "healthy",
+        "rag_initialized": routes.rag_store is not None,
+        "model_loaded": routes.is_model_loaded()
+    }
+
+@app.get("/")
+async def root():
+    """API root endpoint."""
+    return {
+        "service": "AniMiKyoku API",
+        "version": "0.1.0",
+        "status": "operational"
+    }
 
 # File upload size limit middleware (10MB)
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB

@@ -14,19 +14,26 @@ from pathlib import Path
 import shutil
 
 from services.gemini_service import (
+    IdentificationResult,
     identify_anime_from_poster,
     fetch_supplemental_themes,
     is_configured as gemini_is_configured
 )
 from services.anilist_service import (
     fetch_anime_info,
+    fetch_anime_info_by_id,
     fetch_trending_anime,
     search_anime
+)
+from services.tracemoe_service import (
+    TraceMoeResult,
+    identify_via_tracemoe,
+    is_tracemoe_enabled,
 )
 from services.animethemes_service import fetch_themes_from_api
 
 # RAG imports
-from rag.clip_embedder import generate_embedding
+from rag.clip_embedder import generate_embedding, is_model_loaded
 from rag.vector_store import VectorStore
 from rag.ingestion import ingest_poster
 from utils.image_validation import validate_image
@@ -40,22 +47,22 @@ limiter = Limiter(key_func=get_remote_address)
 # RAG store will be initialized lazily during application startup to avoid
 # performing heavy I/O / model loads at import time (which can crash process
 # startup on platforms like Fly where imports must be fast).
-from pathlib import Path
 import os
-from typing import Optional
+import threading
 
 # Get project root (backend/../ = project root)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # On Render / Fly, set DATA_DIR_PATH to the mount path of the persistent disk
 # (e.g., /data/animikyoku). Keep default to local `data/` for development.
-DATA_DIR_PATH = os.getenv("DATA_DIR_PATH", str(PROJECT_ROOT / "data"))
+DATA_DIR_PATH = os.getenv("DATA_DIR_PATH") or str(PROJECT_ROOT / "data")
 DATA_DIR = Path(DATA_DIR_PATH)
-INITIAL_DATA_DIR = Path(os.getenv("INITIAL_DATA_DIR", "/app/data_initial"))
+INITIAL_DATA_DIR = Path(os.getenv("INITIAL_DATA_DIR") or "/app/data_initial")
 
 # Placeholder for the VectorStore instance. Use `initialize_rag()` from
 # application startup to populate this value.
 rag_store: Optional[VectorStore] = None
+_rag_init_lock = threading.Lock()
 
 
 def ensure_data_initialized() -> None:
@@ -69,7 +76,7 @@ def ensure_data_initialized() -> None:
     try:
         posters_path = DATA_DIR / "posters.json"
         if not posters_path.exists() and (INITIAL_DATA_DIR / "posters.json").exists():
-            logger.info("[INIT] Volume missing posters.json — copying initial data to /app/data")
+            logger.info(f"[INIT] Volume missing posters.json — copying initial data to {DATA_DIR}")
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             for item in INITIAL_DATA_DIR.iterdir():
                 target = DATA_DIR / item.name
@@ -89,18 +96,19 @@ def initialize_rag():
     function will log the error and leave `rag_store` as ``None``.
     """
     global rag_store
-    try:
-        # Fail-safe: ensure the data directory has initial contents
-        ensure_data_initialized()
-        rag_store = VectorStore(
-            index_path=str(DATA_DIR / "index.faiss"),
-            metadata_path=str(DATA_DIR / "posters.json"),
-            dimension=512,
-        )
-        logger.info(f"[OK] RAG vector store initialized: {rag_store.index.ntotal} vectors loaded")
-    except Exception as e:
-        logger.error(f"[ERROR] Failed to initialize RAG store: {e}", exc_info=True)
-        rag_store = None
+    with _rag_init_lock:
+        try:
+            # Fail-safe: ensure the data directory has initial contents
+            ensure_data_initialized()
+            rag_store = VectorStore(
+                index_path=str(DATA_DIR / "index.faiss"),
+                metadata_path=str(DATA_DIR / "posters.json"),
+                dimension=512,
+            )
+            logger.info(f"[OK] RAG vector store initialized: {rag_store.index.ntotal} vectors loaded")
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to initialize RAG store: {e}", exc_info=True)
+            rag_store = None
 
 
 async def identify_via_rag(
@@ -134,7 +142,7 @@ async def identify_via_rag(
         logger.debug(f"Generated embedding shape: {embedding.shape}, norm: {norm:.6f}")
         
         # Step 2: Search FAISS index
-        logger.info(f"Searching {rag_store.index.ntotal} vectors in FAISS index...")
+        logger.info(f"Searching {rag_store.get_stats()['total_vectors']} vectors in FAISS index...")
         results = rag_store.search(embedding, k=3)  # Get top 3 for logging
         
         if not results:
@@ -180,7 +188,7 @@ async def identify_via_rag(
         return {'found': False, 'error': str(e)}
 
 
-async def identify_via_gemini(image_data: bytes, mime_type: str) -> str:
+async def identify_via_gemini(image_data: bytes, mime_type: str) -> IdentificationResult:
     """
     Fallback: Identify anime using Gemini.
     
@@ -189,7 +197,7 @@ async def identify_via_gemini(image_data: bytes, mime_type: str) -> str:
         mime_type: MIME type of the image
     
     Returns:
-        Anime title string
+        IdentificationResult with title, confidence, alt_titles, and ocr_text
     
     Raises:
         HTTPException: If Gemini fails or image is not anime
@@ -206,8 +214,164 @@ async def identify_via_gemini(image_data: bytes, mime_type: str) -> str:
             detail=f'This appears to be "{result.title}", which is not a recognized anime series. Please upload an anime poster or screenshot.'
         )
     
-    logger.info(f"Gemini identified: {result.title} (confidence: {result.confidence})")
-    return result.title
+    logger.info(
+        f"Gemini identified: {result.title} "
+        f"(confidence: {result.confidence}, alt_titles: {len(result.alt_titles)}, ocr: {bool(result.ocr_text)})"
+    )
+    return result
+
+
+def _is_anilist_outage_error(err: Exception) -> bool:
+    """Return True when an AniList error indicates a transport, 429, or 5xx outage."""
+    msg = str(err)
+    return any(
+        marker in msg
+        for marker in (
+            "Failed to communicate with Anilist",
+            "Could not connect to anime database",
+            "Could not search anime database",
+            "Failed to search Anilist",
+        )
+    )
+
+
+def _pick_best_anilist_match(results: List[Dict[str, Any]], candidates: List[str]) -> Dict[str, Any]:
+    """Prefer an AniList result matching candidates in priority order (primary > alt > ocr)."""
+    dict_results = [m for m in results if isinstance(m, dict)]
+    if not dict_results:
+        raise ValueError("AniList search returned no valid media objects")
+
+    normalized_candidates = [
+        " ".join(c.split()).casefold()
+        for c in candidates
+        if isinstance(c, str) and c.strip()
+    ]
+    for candidate_key in normalized_candidates:
+        for media in dict_results:
+            titles = media.get('title')
+            if not isinstance(titles, dict):
+                continue
+            for key in ('english', 'romaji', 'native'):
+                val = titles.get(key)
+                if isinstance(val, str) and val.strip():
+                    if " ".join(val.split()).casefold() == candidate_key:
+                        return media
+
+    return dict_results[0]
+
+
+async def resolve_anilist_from_candidates(
+    primary_title: str,
+    alt_titles: Optional[List[str]] = None,
+    ocr_text: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Resolve anime metadata from AniList using primary title, then fall back to
+    alternate titles and OCR text via search_anime if primary lookup fails.
+    """
+    cleaned_primary = " ".join(primary_title.split()) if isinstance(primary_title, str) else ""
+    skip_primary = not cleaned_primary or cleaned_primary.casefold() == "unknown"
+
+    all_candidates: List[str] = []
+    seen = set()
+    raw_sequence = [*(alt_titles or []), ocr_text] if skip_primary else [cleaned_primary, *(alt_titles or []), ocr_text]
+    for raw in raw_sequence:
+        if not isinstance(raw, str):
+            continue
+        cleaned = " ".join(raw.split())
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        all_candidates.append(cleaned)
+
+    primary_err: Optional[Exception] = None
+    if not skip_primary:
+        try:
+            return await fetch_anime_info(cleaned_primary)
+        except Exception as err:
+            if _is_anilist_outage_error(err):
+                raise
+            primary_err = err
+            fallback_candidates = [c for c in all_candidates if c.casefold() != cleaned_primary.casefold()]
+    else:
+        fallback_candidates = all_candidates
+
+    if not fallback_candidates:
+        if primary_err is not None:
+            raise primary_err
+        raise Exception('No results found for "Unknown".')
+
+    logger.warning(
+        f"Primary AniList lookup skipped/failed for '{cleaned_primary or 'Unknown'}' "
+        f"({primary_err}); trying {len(fallback_candidates)} fallback candidate(s)..."
+    )
+
+    last_err: Optional[Exception] = primary_err
+    for candidate in fallback_candidates:
+        try:
+            search_res = await search_anime(candidate, page=1, per_page=5)
+            results = search_res.get('results') or []
+            if results:
+                try:
+                    matched = _pick_best_anilist_match(results, all_candidates)
+                    logger.info(f"✓ AniList disambiguation resolved via candidate '{candidate}'")
+                    return matched
+                except ValueError:
+                    continue
+        except Exception as search_err:
+            if _is_anilist_outage_error(search_err):
+                logger.warning(f"AniList outage during disambiguation: {search_err}")
+                raise search_err
+            logger.debug(f"Disambiguation search failed for '{candidate}': {search_err}")
+            last_err = search_err
+
+    if primary_err is not None:
+        raise primary_err
+    if last_err is not None:
+        raise last_err
+    raise Exception(f'No results found for "{cleaned_primary or "Unknown"}".')
+
+
+AUTO_INGEST_TRACEMOE_THRESHOLD = 0.90
+_ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _sanitize_image_ext(filename: Optional[str]) -> str:
+    """Return a safe lowercase image extension, defaulting to .jpg."""
+    raw_ext = Path(filename or "image.jpg").suffix.lower()
+    return raw_ext if raw_ext in _ALLOWED_IMAGE_EXTENSIONS else ".jpg"
+
+
+def is_auto_ingest_enabled() -> bool:
+    """Return True if AUTO_INGEST_HIGH_CONFIDENCE is enabled (defaults to True)."""
+    val = os.getenv("AUTO_INGEST_HIGH_CONFIDENCE", "true")
+    return val.strip().lower() in {"true", "1", "yes"}
+
+
+async def _ingest_and_sync_rag(
+    image_bytes: bytes,
+    anime_title: str,
+    source: str,
+    save_image: bool,
+    file_extension: str,
+) -> Dict[str, Any]:
+    """Ingest a poster and keep the global live `rag_store` synchronized even if it started as None."""
+    target_store = rag_store
+    result = await ingest_poster(
+        image_bytes=image_bytes,
+        anime_title=anime_title,
+        source=source,
+        save_image=save_image,
+        file_extension=file_extension,
+        vector_store=target_store,
+        data_dir=DATA_DIR,
+    )
+    if result.get('success') and (target_store is None or rag_store is None):
+        initialize_rag()
+    return result
 
 
 @router.post("/identify")
@@ -215,8 +379,10 @@ async def identify_via_gemini(image_data: bytes, mime_type: str) -> str:
 async def identify_poster(
     request: Request,
     file: UploadFile = File(...),
-    force_rag: Optional[bool] = Query(False, description="Force RAG-only mode (no Gemini fallback, for testing)"),
-    similarity_threshold: Optional[float] = Query(0.70, description="Minimum similarity for RAG match (0.0-1.0)")
+    force_rag: Optional[bool] = Query(False, description="Force RAG-only mode (no fallback, for testing)"),
+    similarity_threshold: Optional[float] = Query(0.70, description="Minimum similarity for RAG match (0.0-1.0)"),
+    skip_tracemoe: Optional[bool] = Query(False, description="Skip trace.moe tier (used by gemini-only mode)"),
+    skip_rag: Optional[bool] = Query(False, description="Skip local RAG tier (used by gemini-only mode)")
 ) -> JSONResponse:
     """
     Main identification endpoint.
@@ -225,20 +391,18 @@ async def identify_poster(
     
     Request:
         - file: Image file (poster/screenshot)
-        - force_rag: (Optional) If true, only use RAG (no Gemini fallback)
+        - force_rag: (Optional) If true, only use RAG (no fallback)
         - similarity_threshold: (Optional) Minimum similarity for RAG (default: 0.70)
+        - skip_tracemoe: (Optional) If true, bypass trace.moe and fall back directly to Gemini
+        - skip_rag: (Optional) If true, bypass local RAG (ignored when force_rag=true)
     
     Response:
-        - identificationMethod: 'rag' or 'gemini'
+        - identificationMethod: 'rag', 'tracemoe', or 'gemini'
         - identifiedTitle: Anime title string
         - animeData: AniList metadata
         - themeData: Combined themes from AnimeThemes + Gemini
+        - autoIngested: Whether high-confidence result was auto-cached in FAISS
         - ragDebug: (Optional) RAG search details for debugging
-    
-    Testing Modes:
-        - Normal: POST /identify (RAG with Gemini fallback)
-        - Force RAG: POST /identify?force_rag=true (RAG only, fails if not found)
-        - Custom threshold: POST /identify?similarity_threshold=0.85 (stricter matching)
     """
     try:
         # Read image file
@@ -257,11 +421,22 @@ async def identify_poster(
         
         # Ensure threshold has a default value
         threshold = similarity_threshold if similarity_threshold is not None else 0.70
-        logger.info(f"Mode: {'RAG-only' if force_rag else 'RAG + Gemini fallback'}, threshold: {threshold}")
+        logger.info(
+            f"Mode: {'RAG-only' if force_rag else 'RAG + trace.moe + Gemini fallback'}, "
+            f"threshold: {threshold}, skip_rag: {bool(skip_rag)}, skip_tracemoe: {bool(skip_tracemoe)}"
+        )
         
-        # Step 1: Try RAG identification
-        rag_result = await identify_via_rag(image_data, mime_type, similarity_threshold=threshold)
+        # Tier 1: Try RAG identification (unless explicitly skipped)
+        if skip_rag and not force_rag:
+            rag_result = {'found': False, 'reason': 'RAG skipped (skip_rag=true)', 'top_matches': []}
+        else:
+            rag_result = await identify_via_rag(image_data, mime_type, similarity_threshold=threshold)
+
         rag_debug = None
+        tracemoe_result: Optional[TraceMoeResult] = None
+        gemini_result: Optional[IdentificationResult] = None
+        anime_info: Optional[Dict[str, Any]] = None
+        auto_ingested = False
         
         if rag_result['found']:
             anime_title = rag_result['anime_title']
@@ -271,8 +446,8 @@ async def identify_poster(
                 'top_matches': rag_result.get('top_matches', [])
             }
             logger.info(f"✅ RAG match found: {anime_title} (similarity: {rag_result.get('similarity', 0):.4f})")
+            anime_info = await fetch_anime_info(anime_title)
         else:
-            # Step 2: Fallback to Gemini (unless force_rag mode)
             if force_rag:
                 # Force RAG mode: fail with debugging info
                 logger.warning("RAG match not found and force_rag=true, returning error")
@@ -286,34 +461,107 @@ async def identify_poster(
                         'threshold': similarity_threshold
                     }
                 }, status_code=404)
-            # If Gemini is not configured, return a clear error
-            if not gemini_is_configured():
-                logger.warning("Gemini not configured; cannot perform fallback identification")
-                raise HTTPException(status_code=503, detail=(
-                    "RAG did not find a confident match and Gemini is not configured. "
-                    "Please set GEMINI_API_KEY or switch to 'rag-only' mode."
-                ))
 
-            anime_title = await identify_via_gemini(image_data, mime_type)
-            identification_method = 'gemini'
-            rag_debug = {
-                'attempted': True,
-                'reason': rag_result.get('reason', 'Not found'),
-                'top_matches': rag_result.get('top_matches', [])
-            }
-            logger.info(f"✅ Gemini identified: {anime_title}")
+            # Tier 2: Try trace.moe scene lookup (unless bypassed or disabled)
+            tracemoe_active = (not skip_tracemoe) and is_tracemoe_enabled()
+            if tracemoe_active:
+                candidate_tm = await identify_via_tracemoe(image_data, mime_type=mime_type)
+                if candidate_tm is not None:
+                    try:
+                        anime_info = await fetch_anime_info_by_id(candidate_tm.anilist_id)
+                        tracemoe_result = candidate_tm
+                        identification_method = 'tracemoe'
+                        tm_titles = anime_info.get('title') if isinstance(anime_info, dict) else {}
+                        if not isinstance(tm_titles, dict):
+                            tm_titles = {}
+                        anime_title = (
+                            tm_titles.get('english')
+                            or tm_titles.get('romaji')
+                            or tm_titles.get('native')
+                            or f"AniList #{candidate_tm.anilist_id}"
+                        )
+                        rag_debug = {
+                            'attempted': True,
+                            'reason': rag_result.get('reason', 'Not found'),
+                            'top_matches': rag_result.get('top_matches', []),
+                            'tracemoe': candidate_tm.to_dict(),
+                        }
+                        logger.info(
+                            f"✅ trace.moe identified: {anime_title} "
+                            f"(anilist_id={candidate_tm.anilist_id}, similarity={candidate_tm.similarity:.4f})"
+                        )
+                    except Exception as tm_err:
+                        if _is_anilist_outage_error(tm_err):
+                            raise
+                        logger.warning(
+                            f"AniList ID lookup failed for trace.moe ID {candidate_tm.anilist_id}: "
+                            f"{tm_err}; falling through to Gemini"
+                        )
+                        anime_info = None
+
+            # Tier 3: Fallback to Gemini VLM if Tier 1 & Tier 2 missed
+            if anime_info is None:
+                if not gemini_is_configured():
+                    logger.warning("Gemini not configured; cannot perform fallback identification")
+                    prefix = "RAG and trace.moe did not find a confident match" if tracemoe_active else "RAG did not find a confident match"
+                    raise HTTPException(status_code=503, detail=(
+                        f"{prefix} and Gemini is not configured. "
+                        "Please set GEMINI_API_KEY or switch to 'rag-only' mode."
+                    ))
+
+                gemini_result = await identify_via_gemini(image_data, mime_type)
+                anime_title = gemini_result.title
+                identification_method = 'gemini'
+                rag_debug = {
+                    'attempted': True,
+                    'reason': rag_result.get('reason', 'Not found'),
+                    'top_matches': rag_result.get('top_matches', []),
+                    'raw_gemini_title': gemini_result.title,
+                    'gemini_confidence': gemini_result.confidence,
+                    'alt_titles': gemini_result.alt_titles,
+                    'ocr_text': gemini_result.ocr_text,
+                }
+                logger.info(f"✅ Gemini identified: {anime_title}")
+                anime_info = await resolve_anilist_from_candidates(
+                    gemini_result.title,
+                    alt_titles=gemini_result.alt_titles,
+                    ocr_text=gemini_result.ocr_text,
+                )
         
-        # Step 3: Fetch anime metadata from AniList
-        logger.info(f"Fetching AniList info for: {anime_title}")
-        anime_info = await fetch_anime_info(anime_title)
-        
-        # Use the validated title from AniList for theme searches
+        # Use the validated title from AniList for theme searches and fallback outputs
+        title_obj = anime_info.get('title') or {}
+        if not isinstance(title_obj, dict):
+            title_obj = {}
         validated_title = (
-            anime_info.get('title', {}).get('english') or
-            anime_info.get('title', {}).get('romaji') or
-            anime_info.get('title', {}).get('native') or
+            title_obj.get('english') or
+            title_obj.get('romaji') or
+            title_obj.get('native') or
             anime_title
         )
+        identified_title = validated_title if identification_method in ('tracemoe', 'gemini') else anime_title
+
+        # Confidence-gated live FAISS write-through for high-confidence trace.moe matches
+        if (
+            identification_method == 'tracemoe'
+            and tracemoe_result is not None
+            and tracemoe_result.similarity >= AUTO_INGEST_TRACEMOE_THRESHOLD
+            and is_auto_ingest_enabled()
+        ):
+            try:
+                ingest_res = await _ingest_and_sync_rag(
+                    image_bytes=image_data,
+                    anime_title=validated_title,
+                    source="tracemoe",
+                    save_image=True,
+                    file_extension=_sanitize_image_ext(file.filename),
+                )
+                if ingest_res.get('success'):
+                    auto_ingested = True
+                    logger.info(f"✅ Auto-ingested high-confidence trace.moe match: {validated_title}")
+                else:
+                    logger.warning(f"Auto-ingestion returned unsuccessful status: {ingest_res.get('error')}")
+            except Exception as ingest_err:
+                logger.warning(f"Auto-ingestion failed (non-fatal): {ingest_err}")
         
         # Step 4: Fetch themes from AnimeThemes API (parallel with Gemini)
         logger.info(f"Fetching themes for: {validated_title}")
@@ -325,9 +573,10 @@ async def identify_poster(
         response_data = {
             'success': True,
             'identificationMethod': identification_method,
-            'identifiedTitle': anime_title,
+            'identifiedTitle': identified_title,
             'animeData': anime_info,
-            'themeData': merged_themes
+            'themeData': merged_themes,
+            'autoIngested': auto_ingested,
         }
         
         # Include RAG debugging info if available
@@ -335,14 +584,14 @@ async def identify_poster(
             response_data['ragDebug'] = rag_debug
         
         # Add feedback support:
-        # - If Gemini was used (not in RAG), enable "Add to Database" button
-        # - If RAG was used, enable "Report Incorrect" button
-        if identification_method == 'gemini':
-            response_data['needsConfirmation'] = True
-            response_data['confirmationMessage'] = 'Add this anime to database for faster future searches?'
-        elif identification_method == 'rag':
+        # - If matched via RAG or already auto-ingested, enable "Report Incorrect" button
+        # - Otherwise, prompt user to confirm adding to database
+        if identification_method == 'rag' or auto_ingested:
             response_data['canReportIncorrect'] = True
             response_data['reportMessage'] = 'Was this identification incorrect?'
+        else:
+            response_data['needsConfirmation'] = True
+            response_data['confirmationMessage'] = 'Add this anime to database for faster future searches?'
         
         return JSONResponse(response_data)
         
@@ -350,6 +599,9 @@ async def identify_poster(
         # Re-raise HTTP exceptions (they already have proper status codes)
         raise
     except Exception as e:
+        if _is_anilist_outage_error(e):
+            logger.error(f"AniList outage in identify_poster: {e}")
+            raise HTTPException(status_code=503, detail=str(e))
         logger.error(f"Error in identify_poster: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
@@ -462,7 +714,7 @@ async def confirm_and_ingest(
     try:
         # Read image data
         image_data = await file.read()
-        file_ext = Path(file.filename or "image.jpg").suffix or ".jpg"
+        file_ext = _sanitize_image_ext(file.filename)
         
         # Validate image before ingestion
         is_valid, error_msg, img_metadata = validate_image(image_data)
@@ -479,13 +731,13 @@ async def confirm_and_ingest(
         logger.info(f"  Source: {source}")
         logger.info(f"  Save image: {save_image_bool}")
         
-        # Ingest the poster
-        result = await ingest_poster(
+        # Ingest the poster (and sync live in-memory rag_store)
+        result = await _ingest_and_sync_rag(
             image_bytes=image_data,
             anime_title=confirmed_title,
             source=source,
             save_image=save_image_bool,
-            file_extension=file_ext
+            file_extension=file_ext,
         )
         
         if not result['success']:
@@ -499,9 +751,12 @@ async def confirm_and_ingest(
         logger.info(f"  Index now contains {result['index_size']} vectors")
         
         # Prepare user-friendly response
-        message = f"✓ '{confirmed_title}' has been added to the database!"
-        if result.get('was_duplicate'):
-            message += " (Added as variant due to name collision)"
+        if result.get('skipped_duplicate'):
+            message = f"✓ '{confirmed_title}' is already in the database!"
+        else:
+            message = f"✓ '{confirmed_title}' has been added to the database!"
+            if result.get('was_duplicate'):
+                message += " (Added as variant due to name collision)"
         
         return JSONResponse({
             'success': True,
@@ -510,6 +765,7 @@ async def confirm_and_ingest(
             'ingestionDetails': {
                 'indexSize': result['index_size'],
                 'wasDuplicate': result.get('was_duplicate', False),
+                'skippedDuplicate': result.get('skipped_duplicate', False),
                 'posterPath': result.get('poster_path'),
                 'embeddingShape': result.get('embedding_shape')
             }
@@ -708,13 +964,14 @@ async def get_rag_stats() -> JSONResponse:
                 'isHealthy': False
             })
         
+        stats = rag_store.get_stats()
         return JSONResponse({
             'success': True,
-            'indexSize': rag_store.index.ntotal,
-            'metadataCount': len(rag_store.metadata),
-            'mappingCount': len(rag_store.id_to_slug),
+            'indexSize': stats['total_vectors'],
+            'metadataCount': stats['metadata_count'],
+            'mappingCount': stats['mapped_ids'],
             'isHealthy': True,
-            'dimension': rag_store.dimension
+            'dimension': stats['dimension']
         })
     except Exception as e:
         logger.error(f"Error fetching stats: {e}")
