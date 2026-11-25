@@ -1,6 +1,7 @@
 # Environments
 .env
 .vscode/
+.agent/
 
 # Dependencies
 /frontend/node_modules/
@@ -11,6 +12,18 @@
 /dist/
 /build/
 
-# Data files and indexes - should not be committed
 /data/
 docs/
+
+
+# Local development
+__pycache__/
+*.pyc
+
+# Data
+data/index.faiss
+data/index.mapping.json
+
+# BALAI: generated Claude Code skills — build artifact of .agent/.
+# Do not hand-edit or commit; rebuild with boot_agent.py.
+.claude/skills/
