@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 _model_cache = None
 
 
+def is_model_loaded() -> bool:
+    """Check if CLIP model is loaded in cache."""
+    return _model_cache is not None
+
+
 def load_clip_model(model_name: str = "ViT-B-32", pretrained: str = "openai"):
     """
     Load and cache the CLIP model for reuse.
@@ -60,6 +65,26 @@ def load_clip_model(model_name: str = "ViT-B-32", pretrained: str = "openai"):
         logger.info("✅ CLIP model loaded and cached successfully")
     
     return _model_cache
+
+
+async def warm_up_model():
+    """
+    Warm up the CLIP model at startup to eliminate first-request latency.
+    
+    Creates a dummy image and generates an embedding to force model loading
+    and compilation. This prevents the first user request from being slow.
+    """
+    try:
+        # Create a small dummy RGB image
+        dummy_image = Image.new('RGB', (224, 224), color='gray')
+        
+        # Generate embedding (this will load and cache the model)
+        _ = await generate_embedding(dummy_image)
+        
+        logger.info("✅ CLIP model warm-up successful")
+    except Exception as e:
+        logger.error(f"CLIP model warm-up failed: {e}")
+        raise
 
 
 async def generate_embedding(image: Union[bytes, Image.Image]) -> np.ndarray:

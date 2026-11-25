@@ -17,8 +17,10 @@ FAISS IndexFlatIP computes this inner product efficiently using:
 import faiss
 import numpy as np
 import json
+import os
+import threading
 from pathlib import Path
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Any
 from dataclasses import dataclass
 import logging
 
@@ -53,14 +55,6 @@ class VectorStore:
     - Stores normalized embeddings (L2 norm = 1.0)
     - Maps FAISS index positions to anime slugs
     
-    Why IndexFlatIP?
-    - "Flat" = exhaustive search, no approximation (100% accurate)
-    - "IP" = Inner Product, which equals cosine similarity for normalized vectors
-    - Perfect for our scale (235 posters → ~120K operations, runs in <1ms)
-    
-    For larger datasets (millions), consider:
-    - IndexIVFFlat: Clusters vectors, searches subset (faster, slight accuracy loss)
-    - IndexHNSW: Graph-based approximate search (very fast, 99%+ accuracy)
     """
     
     def __init__(
@@ -85,6 +79,7 @@ class VectorStore:
         self.index_path = Path(index_path)
         self.metadata_path = Path(metadata_path)
         self.dimension = dimension
+        self._lock = threading.RLock()
         
         # ID to slug mapping (FAISS uses integer IDs, we use slugs)
         self.id_to_slug: List[str] = []
@@ -99,7 +94,7 @@ class VectorStore:
             mapping_path = self.index_path.with_suffix('.mapping.json')
             if mapping_path.exists():
                 logger.info(f"Loading ID mapping from {mapping_path}")
-                with open(mapping_path, 'r') as f:
+                with open(mapping_path, 'r', encoding='utf-8') as f:
                     self.id_to_slug = json.load(f)
                 logger.info(f"[OK] Loaded ID mapping with {len(self.id_to_slug)} entries")
                 
@@ -124,7 +119,7 @@ class VectorStore:
         # Load metadata
         if self.metadata_path.exists():
             logger.info(f"Loading metadata from {self.metadata_path}")
-            with open(metadata_path, 'r', encoding='utf-8') as f:
+            with open(self.metadata_path, 'r', encoding='utf-8') as f:
                 self.metadata = json.load(f)
             logger.info(f"[OK] Loaded metadata for {len(self.metadata)} anime")
             
@@ -153,9 +148,7 @@ class VectorStore:
         Rebuild the index ID → slug mapping from metadata.
         
         FAISS assigns sequential integer IDs (0, 1, 2, ...) to vectors.
-        We need to map these back to anime slugs.
         
-        Strategy:
         - Only include anime that have embeddings
         - Sort by slug for deterministic ordering
         - Maintain this order when adding vectors
@@ -183,10 +176,7 @@ class VectorStore:
         Returns:
             FAISS index ID (sequential integer)
         
-        Mathematical Requirements:
-            - embedding.shape must be (512,)
-            - ||embedding|| should be ≈ 1.0 (normalized)
-        
+    
         FAISS Operations:
             1. Validates dimension matches index
             2. Stores vector in optimized memory layout
@@ -205,16 +195,17 @@ class VectorStore:
         # Reshape for FAISS (expects 2D array: [n_vectors, dimension])
         embedding_2d = embedding.reshape(1, -1).astype('float32')
         
-        # Add to index
-        self.index.add(embedding_2d)
-        
-        # Track mapping
-        idx = len(self.id_to_slug)
-        self.id_to_slug.append(slug)
-        
-        logger.debug(f"Added {slug} at index {idx} (total: {self.index.ntotal})")
-        
-        return idx
+        with self._lock:
+            # Add to index
+            self.index.add(embedding_2d)
+            
+            # Track mapping
+            idx = len(self.id_to_slug)
+            self.id_to_slug.append(slug)
+            
+            logger.debug(f"Added {slug} at index {idx} (total: {self.index.ntotal})")
+            
+            return idx
     
     def search(
         self, 
@@ -242,89 +233,86 @@ class VectorStore:
            - For 235 vectors × 512 dims ≈ 120K operations
            - With SIMD optimization: ~0.1-0.5 milliseconds
         
-        Mathematical Detail:
-            IndexFlatIP returns negative inner product as "distance"
-            We convert: similarity = -distance
-            Since vectors are normalized: similarity ∈ [0, 1]
         """
         # Validate query
         assert query_embedding.shape == (self.dimension,), \
             f"Query shape {query_embedding.shape} doesn't match dimension {self.dimension}"
         
-        # Check if index is empty
-        if self.index.ntotal == 0:
-            logger.warning(
-                "[ERROR] Index is empty! No vectors to search. "
-                "Did the index load correctly?"
-            )
-            return []
-        
-        # Check if mapping is empty (critical error)
-        if len(self.id_to_slug) == 0:
-            logger.error(
-                f"[CRITICAL] Index has {self.index.ntotal} vectors "
-                f"but ID mapping is empty! Cannot resolve results."
-            )
-            return []
-        
-        # Validate mapping matches index
-        if len(self.id_to_slug) != self.index.ntotal:
-            logger.error(
-                f"[ERROR] MISMATCH: Index has {self.index.ntotal} vectors "
-                f"but mapping has {len(self.id_to_slug)} entries"
-            )
-            return []
-        
-        # Limit k to available vectors
-        k = min(k, self.index.ntotal)
-        
-        # Reshape for FAISS
-        query_2d = query_embedding.reshape(1, -1).astype('float32')
-        
-        # Perform search
-        # Returns: distances (inner products), indices (FAISS IDs)
-        distances, indices = self.index.search(query_2d, k)
-        
-        # Convert to SearchResult objects
-        results = []
-        for i in range(k):
-            faiss_id = int(indices[0][i])
-            raw_distance = float(distances[0][i])
+        with self._lock:
+            # Check if index is empty
+            if self.index.ntotal == 0:
+                logger.warning(
+                    "[ERROR] Index is empty! No vectors to search. "
+                    "Did the index load correctly?"
+                )
+                return []
             
-            # IndexFlatIP returns inner product directly (not negated)
-            # For normalized vectors, this IS the cosine similarity
-            similarity = raw_distance
+            # Check if mapping is empty (critical error)
+            if len(self.id_to_slug) == 0:
+                logger.error(
+                    f"[CRITICAL] Index has {self.index.ntotal} vectors "
+                    f"but ID mapping is empty! Cannot resolve results."
+                )
+                return []
             
-            # Skip if below threshold
-            if similarity < min_similarity:
-                continue
+            # Validate mapping matches index
+            if len(self.id_to_slug) != self.index.ntotal:
+                logger.error(
+                    f"[ERROR] MISMATCH: Index has {self.index.ntotal} vectors "
+                    f"but mapping has {len(self.id_to_slug)} entries"
+                )
+                return []
             
-            # Get anime info
-            if faiss_id >= len(self.id_to_slug):
-                logger.error(f"Invalid FAISS ID: {faiss_id}")
-                continue
+            # Limit k to available vectors
+            k = min(k, self.index.ntotal)
             
-            slug = self.id_to_slug[faiss_id]
-            anime_data = self.metadata.get(slug, {})
+            # Reshape for FAISS
+            query_2d = query_embedding.reshape(1, -1).astype('float32')
             
-            result = SearchResult(
-                slug=slug,
-                anime_title=anime_data.get('title', slug),
-                similarity=similarity,
-                poster_path=anime_data.get('path', ''),
-                distance=raw_distance
-            )
-            results.append(result)
-        
-        logger.debug(f"Search returned {len(results)} results (k={k})")
-        if results:
-            logger.debug(f"Top match: {results[0].anime_title} (similarity={results[0].similarity:.4f})")
-        
-        return results
+            # Perform search
+            # Returns: distances (inner products), indices (FAISS IDs)
+            distances, indices = self.index.search(query_2d, k)
+            
+            # Convert to SearchResult objects
+            results = []
+            for i in range(k):
+                faiss_id = int(indices[0][i])
+                raw_distance = float(distances[0][i])
+                
+                # IndexFlatIP returns inner product directly (not negated)
+                # For normalized vectors, this IS the cosine similarity
+                similarity = raw_distance
+                
+                # Skip if below threshold
+                if similarity < min_similarity:
+                    continue
+                
+                # Get anime info
+                if faiss_id < 0 or faiss_id >= len(self.id_to_slug):
+                    logger.error(f"Invalid FAISS ID: {faiss_id}")
+                    continue
+                
+                slug = self.id_to_slug[faiss_id]
+                anime_data = self.metadata.get(slug, {})
+                
+                result = SearchResult(
+                    slug=slug,
+                    anime_title=anime_data.get('title', slug),
+                    similarity=similarity,
+                    poster_path=anime_data.get('path', ''),
+                    distance=raw_distance
+                )
+                results.append(result)
+            
+            logger.debug(f"Search returned {len(results)} results (k={k})")
+            if results:
+                logger.debug(f"Top match: {results[0].anime_title} (similarity={results[0].similarity:.4f})")
+            
+            return results
     
     def save(self):
         """
-        Persist FAISS index to disk.
+        Persist FAISS index and ID mapping atomically to disk.
         
         File Format:
             - Binary format optimized for fast loading
@@ -333,21 +321,37 @@ class VectorStore:
         
         Note: FAISS index only stores vectors, not the slug mapping.
         The mapping is reconstructed from metadata when loading.
-        
-        Performance:
-            - Write: ~1-2ms
-            - Read: ~5-10ms
-        """
-        self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        faiss.write_index(self.index, str(self.index_path))
-        logger.info(f"✅ Saved FAISS index to {self.index_path} ({self.index.ntotal} vectors)")
-        
-        # Also save the ID mapping separately for reconstruction
-        mapping_path = self.index_path.with_suffix('.mapping.json')
-        with open(mapping_path, 'w') as f:
-            json.dump(self.id_to_slug, f, indent=2)
-        logger.info(f"✅ Saved ID mapping to {mapping_path}")
     
+        """
+        with self._lock:
+            self.index_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_index_path = self.index_path.with_suffix('.faiss.tmp')
+            faiss.write_index(self.index, str(temp_index_path))
+            os.replace(temp_index_path, self.index_path)
+            logger.info(f"✅ Saved FAISS index to {self.index_path} ({self.index.ntotal} vectors)")
+            
+            # Also save the ID mapping atomically for reconstruction
+            mapping_path = self.index_path.with_suffix('.mapping.json')
+            temp_mapping_path = mapping_path.with_suffix('.json.tmp')
+            with open(temp_mapping_path, 'w', encoding='utf-8') as f:
+                json.dump(self.id_to_slug, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_mapping_path, mapping_path)
+            logger.info(f"✅ Saved ID mapping to {mapping_path}")
+    
+    def sync_from(self, other: "VectorStore", metadata: Dict[str, Any]) -> None:
+        """Atomically replace in-memory index, ID mapping, and metadata from a freshly persisted store."""
+        if len(other.id_to_slug) != other.index.ntotal:
+            raise ValueError(
+                f"Cannot sync VectorStore: index has {other.index.ntotal} vectors "
+                f"but mapping has {len(other.id_to_slug)} entries"
+            )
+        with self._lock:
+            self.index = other.index
+            self.id_to_slug = list(other.id_to_slug)
+            self.metadata = dict(metadata)
+
     def get_stats(self) -> Dict:
         """
         Get statistics about the vector store.
@@ -355,11 +359,13 @@ class VectorStore:
         Returns:
             Dictionary with index statistics
         """
-        return {
-            'total_vectors': self.index.ntotal,
-            'dimension': self.dimension,
-            'index_type': 'IndexFlatIP',
-            'memory_usage_mb': (self.index.ntotal * self.dimension * 4) / (1024 * 1024),
-            'metadata_count': len(self.metadata),
-            'mapped_ids': len(self.id_to_slug)
-        }
+        with self._lock:
+            return {
+                'total_vectors': self.index.ntotal,
+                'dimension': self.dimension,
+                'index_type': 'IndexFlatIP',
+                'memory_usage_mb': (self.index.ntotal * self.dimension * 4) / (1024 * 1024),
+                'metadata_count': len(self.metadata),
+                'mapped_ids': len(self.id_to_slug)
+            }
+    
