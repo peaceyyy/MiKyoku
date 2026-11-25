@@ -1,0 +1,53 @@
+name: animikyoku
+region: nyc
+# DigitalOcean App Platform Configuration
+# Optimized for ML workloads with persistent storage
+
+services:
+  - name: backend
+    # GitHub repo will be auto-detected when deploying via doctl or DO UI
+    github:
+      repo: YOUR_USERNAME/AniMiKyoku
+      branch: main
+      deploy_on_push: true
+    
+    # Docker build configuration
+    dockerfile_path: Dockerfile
+    
+    # Resource allocation
+    # Basic: $5/month (512MB RAM) - Minimum for testing
+    # Professional: $12/month (1GB RAM) - Recommended for production
+    instance_size_slug: professional-xs  # 1GB RAM, 1 vCPU
+    instance_count: 1
+    
+    # HTTP configuration
+    http_port: 8000
+    
+    # Health check (prevents app from being marked as crashed)
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 60  # Give model time to load
+      period_seconds: 30
+      timeout_seconds: 10
+      success_threshold: 1
+      failure_threshold: 3
+    
+    # Environment variables
+    envs:
+      - key: DATA_DIR_PATH
+        value: /data
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: GEMINI_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+    
+    # Persistent storage for posters, embeddings, and FAISS index
+    # This ensures data persists across deployments
+    mounts:
+      - path: /data
+        
+# Domain configuration (optional)
+# domains:
+#   - domain: animikyoku.yourdomain.com
+#     type: PRIMARY
