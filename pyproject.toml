@@ -1,0 +1,33 @@
+[project]
+name = "animikyoku"
+version = "0.1.0"
+description = "Anime poster to OP/ED theme retrieval tool"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27.0",
+    "requests>=2.32.0",
+    "python-dotenv>=1.0.0",
+    "slowapi>=0.1.9",
+    "pillow>=10.0.0",
+    "tqdm>=4.66.0",
+    "rapidfuzz>=3.9.0",
+    "numpy>=1.26.0",
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+    "torchaudio>=2.2.0",
+    "faiss-cpu>=1.8.0",
+    "open-clip-torch>=2.24.0",
+    "ftfy>=6.2.0",
+    "regex>=2024.5.15",
+    "google-genai>=0.1.1",
+    "google-api-python-client>=2.130.0",
+    "portalocker>=2.8.2",
+]
+
+[tool.uv]
+package = false
+
