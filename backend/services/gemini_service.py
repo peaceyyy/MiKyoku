@@ -46,6 +46,56 @@ def get_gemini_model() -> str:
     return DEFAULT_GEMINI_MODEL
 
 
+def get_gemini_fallback_model() -> Optional[str]:
+    """Return optional GEMINI_FALLBACK_MODEL from env for 503 high-demand fallback."""
+    model = os.getenv("GEMINI_FALLBACK_MODEL")
+    if model and model.strip():
+        return model.strip()
+    return None
+
+
+def _is_transient_gemini_error(err: Exception) -> bool:
+    """Return True if error looks like a transient 503 / high-demand / unavailable spike."""
+    msg = str(err).upper()
+    return any(token in msg for token in ("503", "UNAVAILABLE", "HIGH DEMAND", "OVERLOADED", "RESOURCE_EXHAUSTED"))
+
+
+async def _generate_content_with_retry(
+    client: genai.Client,
+    *,
+    contents: Any,
+    config: Optional[types.GenerateContentConfig] = None,
+) -> Any:
+    """Call Gemini generate_content with 1 brief retry on 503 and optional fallback model."""
+    primary_model = get_gemini_model()
+    kwargs: Dict[str, Any] = {"contents": contents}
+    if config is not None:
+        kwargs["config"] = config
+
+    try:
+        return await asyncio.to_thread(
+            client.models.generate_content,
+            model=primary_model,
+            **kwargs,
+        )
+    except Exception as err:
+        if not _is_transient_gemini_error(err):
+            raise
+
+        fallback_model = get_gemini_fallback_model()
+        retry_model = fallback_model if (fallback_model and fallback_model != primary_model) else primary_model
+        logger.warning(
+            f"Gemini transient error on '{primary_model}': {err}; "
+            f"retrying with '{retry_model}' after brief delay..."
+        )
+        await asyncio.sleep(1.0)
+        return await asyncio.to_thread(
+            client.models.generate_content,
+            model=retry_model,
+            **kwargs,
+        )
+
+
 def is_configured() -> bool:
     """Return True if GEMINI_API_KEY appears set."""
     return _resolve_api_key() is not None
@@ -195,11 +245,9 @@ title (string), altTitles (array of strings), ocrText (string or null), isAnime 
 
         image_data = base64.b64decode(base64_image)
         client = get_client()
-        model = get_gemini_model()
 
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=model,
+        response = await _generate_content_with_retry(
+            client,
             contents=[
                 prompt,
                 types.Part.from_bytes(data=image_data, mime_type=mime_type),
@@ -278,10 +326,8 @@ async def fetch_supplemental_themes(anime_title: str) -> List[SeasonCollection]:
         - osts (array of objects with title and artist)"""
 
         client = get_client()
-        model = get_gemini_model()
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=model,
+        response = await _generate_content_with_retry(
+            client,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -386,10 +432,8 @@ async def find_youtube_video_id(search_query: str) -> Optional[str]:
         Extract ONLY the 11-character YouTube video ID. Return ONLY the ID string, no other text."""
 
         client = get_client()
-        model = get_gemini_model()
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=model,
+        response = await _generate_content_with_retry(
+            client,
             contents=prompt,
         )
 
