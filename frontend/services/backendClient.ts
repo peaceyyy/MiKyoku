@@ -9,13 +9,15 @@
 const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
 export type IdentificationMode = 'hybrid' | 'rag-only' | 'gemini-only';
+export type IdentificationMethod = 'rag' | 'tracemoe' | 'gemini';
 
 export interface BackendIdentifyResponse {
   success: boolean;
-  identificationMethod: 'rag' | 'gemini';
+  identificationMethod: IdentificationMethod;
   identifiedTitle: string;
   animeData: any; // TODO: Type this properly with AniList schema
   themeData: any[]; // Array of season theme data
+  autoIngested?: boolean;
   
   // Ingestion fields
   needsConfirmation?: boolean;
@@ -38,7 +40,7 @@ export interface BackendErrorResponse {
  * Identify anime poster via backend unified endpoint
  * 
  * @param file - The image file to analyze
- * @param mode - Identification mode: 'hybrid' (RAG with Gemini fallback), 'rag-only', or 'gemini-only'
+ * @param mode - Identification mode: 'hybrid' (RAG + trace.moe + Gemini fallback), 'rag-only', or 'gemini-only'
  * @returns Backend response with identification results
  * @throws Error with user-friendly message on failure
  */
@@ -58,7 +60,8 @@ export async function identifyPosterViaBackend(
     if (mode === 'rag-only') {
       params.append('force_rag', 'true');
     } else if (mode === 'gemini-only') {
-      params.append('similarity_threshold', '1.0'); // Impossible threshold = forces Gemini
+      params.append('skip_rag', 'true');      // Bypass local RAG directly
+      params.append('skip_tracemoe', 'true'); // Bypass trace.moe directly to Gemini
     }
     
     if (params.toString()) {
@@ -255,7 +258,7 @@ export async function searchYouTubeViaBackend(query: string): Promise<string | n
  * 
  * @param file - The image file to ingest
  * @param confirmedTitle - User-confirmed anime title
- * @param source - Identification source: 'gemini', 'user_correction', or 'manual'
+ * @param source - Identification source: 'gemini', 'tracemoe', 'user_correction', or 'manual'
  * @param saveImage - Whether to save the image file (default: true)
  * @returns Response with ingestion details
  * @throws Error with user-friendly message on failure
@@ -263,7 +266,7 @@ export async function searchYouTubeViaBackend(query: string): Promise<string | n
 export async function confirmAndIngest(
   file: File,
   confirmedTitle: string,
-  source: 'gemini' | 'user_correction' | 'manual' = 'gemini',
+  source: 'gemini' | 'tracemoe' | 'user_correction' | 'manual' = 'gemini',
   saveImage: boolean = true
 ): Promise<{
   success: boolean;
@@ -272,6 +275,7 @@ export async function confirmAndIngest(
   ingestionDetails: {
     indexSize: number;
     wasDuplicate: boolean;
+    skippedDuplicate?: boolean;
     posterPath?: string;
     embeddingShape: number[];
   };

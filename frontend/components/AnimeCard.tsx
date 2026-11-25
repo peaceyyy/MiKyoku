@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { AnimeInfo, SeasonCollection } from '../types';
+import { IdentificationMethod } from '../services/backendClient';
 import { Star, Calendar, Layers, ExternalLink, PlayCircle, Loader2 } from 'lucide-react';
 import ThemeList from './ThemeList';
 
@@ -10,10 +11,29 @@ interface AnimeCardProps {
   themeData: SeasonCollection[] | null;
   loadingThemes: boolean;
   onPlayVideo: (query: string, meta?: {title?: string, artist?: string}) => void;
-  identificationMethod?: 'rag' | 'gemini' | null;
+  identificationMethod?: IdentificationMethod | null;
+  autoIngested?: boolean;
   onReportIncorrect?: () => void;
   canReportIncorrect?: boolean;
 }
+
+const METHOD_BADGE_CONFIG: Record<IdentificationMethod, { label: string; title: string; className: string }> = {
+  rag: {
+    label: 'RAG',
+    title: 'Identified via RAG (Vector Search)',
+    className: 'bg-green-500/20 text-green-600 dark:text-green-400 border border-green-500/30',
+  },
+  tracemoe: {
+    label: 'trace.moe',
+    title: 'Identified via trace.moe (Anime Scene Lookup)',
+    className: 'bg-purple-500/20 text-purple-600 dark:text-purple-400 border border-purple-500/30',
+  },
+  gemini: {
+    label: 'Gemini',
+    title: 'Identified via Gemini LLM',
+    className: 'bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30',
+  },
+};
 
 const AnimeCard: React.FC<AnimeCardProps> = ({ 
   data, 
@@ -22,6 +42,7 @@ const AnimeCard: React.FC<AnimeCardProps> = ({
   loadingThemes, 
   onPlayVideo, 
   identificationMethod,
+  autoIngested = false,
   onReportIncorrect,
   canReportIncorrect = false
 }) => {
@@ -81,16 +102,23 @@ const AnimeCard: React.FC<AnimeCardProps> = ({
                 <div className="flex items-center justify-center md:justify-start gap-2 mb-1 flex-wrap">
                     
                     {/* Identification Method Badge */}
-                    {identificationMethod && (
-                        <span 
-                            className={`px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase rounded-full ${
-                                identificationMethod === 'rag' 
-                                    ? 'bg-green-500/20 text-green-600 dark:text-green-400 border border-green-500/30' 
-                                    : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30'
-                            }`}
-                            title={identificationMethod === 'rag' ? 'Identified via RAG (Vector Search)' : 'Identified via Gemini LLM'}
+                    {identificationMethod && (() => {
+                        const badge = METHOD_BADGE_CONFIG[identificationMethod];
+                        return (
+                            <span
+                                className={`px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase rounded-full ${badge.className}`}
+                                title={badge.title}
+                            >
+                                {badge.label}
+                            </span>
+                        );
+                    })()}
+                    {autoIngested && (
+                        <span
+                            className="px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                            title="Automatically cached in local vector database for instant future lookups"
                         >
-                            {identificationMethod === 'rag' ? 'RAG' : 'Gemini'}
+                            Cached
                         </span>
                     )}
                     {/* Report Incorrect Button */}

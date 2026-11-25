@@ -58,7 +58,7 @@ const Header: React.FC<HeaderProps> = ({
                   ? 'bg-chill-indigo dark:bg-zen-indigo text-white font-bold' 
                   : 'text-chill-stone dark:text-zen-stone hover:text-chill-ink dark:hover:text-zen-ink'
               }`}
-              title="Hybrid Mode (RAG + Gemini Fallback)"
+              title="Hybrid Mode (RAG + trace.moe + Gemini Fallback)"
             >
               Hybrid
             </button>

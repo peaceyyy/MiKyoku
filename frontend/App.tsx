@@ -16,7 +16,8 @@ import {
   confirmAndIngest,
   verifyIngestion,
   fetchThemesByTitle,
-  IdentificationMode 
+  IdentificationMode,
+  IdentificationMethod
 } from './services/backendClient';
 import { AnimeInfo, AppState, SeasonCollection } from './types';
 
@@ -35,7 +36,8 @@ const App: React.FC = () => {
   
   // Identification mode and method tracking
   const [identificationMode, setIdentificationMode] = useState<IdentificationMode>('hybrid');
-  const [identificationMethod, setIdentificationMethod] = useState<'rag' | 'gemini' | null>(null);
+  const [identificationMethod, setIdentificationMethod] = useState<IdentificationMethod | null>(null);
+  const [autoIngested, setAutoIngested] = useState<boolean>(false);
   
   // Video Player State
   const [isVideoPlayerVisible, setIsVideoPlayerVisible] = useState<boolean>(false);
@@ -48,7 +50,7 @@ const App: React.FC = () => {
   const [pendingIngestion, setPendingIngestion] = useState<{
     file: File;
     title: string;
-    source: 'gemini' | 'user_correction';
+    source: 'gemini' | 'tracemoe' | 'user_correction';
   } | null>(null);
   const [isIngesting, setIsIngesting] = useState<boolean>(false);
   
@@ -82,6 +84,7 @@ const App: React.FC = () => {
       setLoadingThemes(false);
       setIsVideoPlayerVisible(false); // Close video on new upload
       setIdentificationMethod(null); // Reset method
+      setAutoIngested(false);
       setShowSuccessNotification(false); // Clear previous notifications
       resetColors(); // Reset extracted colors
       
@@ -102,14 +105,15 @@ const App: React.FC = () => {
       setAnimeData(result.animeData);
       setThemeData(result.themeData);
       setIdentificationMethod(result.identificationMethod); // Store which method was used
+      setAutoIngested(Boolean(result.autoIngested));
       setAppState(AppState.SUCCESS);
 
-      // Check if ingestion confirmation is needed (Gemini identification)
+      // Check if ingestion confirmation is needed (un-cached fallback identification)
       if (result.needsConfirmation) {
         setPendingIngestion({
           file: file,
           title: result.identifiedTitle,
-          source: 'gemini'
+          source: result.identificationMethod === 'tracemoe' ? 'tracemoe' : 'gemini'
         });
         setShowIngestionDialog(true);
       }
@@ -234,6 +238,7 @@ const App: React.FC = () => {
       // Update UI with manually selected anime from search (no re-identification!)
       setIdentifiedTitle(selectedTitle);
       setAnimeData(animeData);
+      setAutoIngested(false);
       
       // Fetch themes for the selected title (no poster scanning needed)
       const themes = await fetchThemesByTitle(selectedTitle);
@@ -281,6 +286,7 @@ const App: React.FC = () => {
       setAnimeData(result.animeData);
       setThemeData(result.themeData);
       setIdentificationMethod(result.identificationMethod);
+      setAutoIngested(Boolean(result.autoIngested));
 
       // Show ingestion dialog with user_correction source
       setPendingIngestion({
@@ -310,6 +316,7 @@ const App: React.FC = () => {
     setActiveVideoSource(null);
     setActiveVideoMeta({});
     setIdentificationMethod(null); // Reset method badge
+    setAutoIngested(false);
     setShowIngestionDialog(false);
     setPendingIngestion(null);
     setShowSuccessNotification(false);
@@ -376,8 +383,9 @@ const App: React.FC = () => {
                 loadingThemes={loadingThemes}
                 onPlayVideo={handlePlayVideo}
                 identificationMethod={identificationMethod}
+                autoIngested={autoIngested}
                 onReportIncorrect={handleReportIncorrect}
-                canReportIncorrect={identificationMethod === 'rag'}
+                canReportIncorrect={identificationMethod === 'rag' || autoIngested}
               />
             </div>
           )}
