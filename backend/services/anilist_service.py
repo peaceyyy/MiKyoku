@@ -22,9 +22,7 @@ HTTPX_TIMEOUT = httpx.Timeout(
     pool=5.0       # 5 seconds to get connection from pool
 )
 
-ANIME_QUERY = """
-query ($search: String) {
-  Media (search: $search, type: ANIME) {
+_MEDIA_FIELDS = """
     id
     title {
       romaji
@@ -49,8 +47,18 @@ query ($search: String) {
         name
       }
     }
-  }
-}
+"""
+
+ANIME_QUERY = f"""
+query ($search: String) {{
+  Media (search: $search, type: ANIME) {{{_MEDIA_FIELDS}  }}
+}}
+"""
+
+ANIME_BY_ID_QUERY = f"""
+query ($id: Int) {{
+  Media (id: $id, type: ANIME) {{{_MEDIA_FIELDS}  }}
+}}
 """
 
 TRENDING_QUERY = """
@@ -219,6 +227,66 @@ async def search_anime(query: str, page: int = 1, per_page: int = 10) -> Dict[st
         raise Exception("Failed to search Anilist.")
 
 
+async def _fetch_single_media(
+    query: str,
+    variables: Dict[str, Any],
+    lookup_label: str,
+) -> Dict[str, Any]:
+    """Execute a single-Media AniList GraphQL query and return the Media dict."""
+    try:
+        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
+            response = await client.post(
+                ANILIST_API_URL,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                json={
+                    'query': query,
+                    'variables': variables,
+                },
+            )
+
+            if not response.is_success:
+                error_details = f"Status: {response.status_code}"
+                try:
+                    error_body = response.json()
+                    if 'errors' in error_body and isinstance(error_body['errors'], list):
+                        error_details = ', '.join([e.get('message', '') for e in error_body['errors']])
+                except Exception:
+                    error_details = response.text if response.text else error_details
+
+                if response.status_code == 404:
+                    logger.info(f"AniList returned 404 for {lookup_label}: {error_details}")
+                    raise Exception(f"No results found for {lookup_label}. ({error_details})")
+
+                logger.error(f"Anilist API Error: {error_details}")
+                raise Exception(f"Could not connect to anime database. ({error_details})")
+
+            data = response.json()
+            if not isinstance(data, dict):
+                raise Exception(f"Could not find information for {lookup_label}.")
+
+            if data.get('errors'):
+                logger.warning(f"Anilist API returned errors: {data['errors']}")
+                raise Exception(f"Could not find information for {lookup_label}.")
+
+            if not data.get('data') or not data['data'].get('Media'):
+                raise Exception(f"No results found for {lookup_label}.")
+
+            return data['data']['Media']
+
+    except httpx.RequestError as e:
+        logger.error(f"Anilist Request Error: {e}")
+        raise Exception("Failed to communicate with Anilist.")
+    except Exception as e:
+        msg = str(e)
+        if msg.startswith('Could not') or msg.startswith('No results found'):
+            raise
+        logger.error(f"Unexpected error: {e}")
+        raise Exception("Failed to communicate with Anilist.")
+
+
 async def fetch_anime_info(title: str) -> Dict[str, Any]:
     """
     Fetches anime information from AniList by title.
@@ -232,50 +300,32 @@ async def fetch_anime_info(title: str) -> Dict[str, Any]:
     Raises:
         Exception: If anime not found or API error occurs
     """
-    try:
-        async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
-            response = await client.post(
-                ANILIST_API_URL,
-                headers={
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                },
-                json={
-                    'query': ANIME_QUERY,
-                    'variables': {'search': title}
-                }
-            )
-            
-            if not response.is_success:
-                # Attempt to extract meaningful error message
-                error_details = f"Status: {response.status_code}"
-                try:
-                    error_body = response.json()
-                    if 'errors' in error_body and isinstance(error_body['errors'], list):
-                        error_details = ', '.join([e.get('message', '') for e in error_body['errors']])
-                except Exception:
-                    error_details = response.text if response.text else error_details
-                
-                logger.error(f"Anilist API Error: {error_details}")
-                raise Exception(f"Could not connect to anime database. ({error_details})")
-            
-            data = response.json()
-            
-            if 'errors' in data:
-                logger.warning(f"Anilist API returned errors: {data['errors']}")
-                raise Exception(f'Could not find information for "{title}".')
-            
-            if not data.get('data') or not data['data'].get('Media'):
-                raise Exception(f'No results found for "{title}".')
-            
-            return data['data']['Media']
-            
-    except httpx.RequestError as e:
-        logger.error(f"Anilist Request Error: {e}")
-        raise Exception("Failed to communicate with Anilist.")
-    except Exception as e:
-        # Re-raise if it's already a formatted error
-        if isinstance(e, Exception) and str(e).startswith('Could not'):
-            raise
-        logger.error(f"Unexpected error: {e}")
-        raise Exception("Failed to communicate with Anilist.")
+    return await _fetch_single_media(
+        query=ANIME_QUERY,
+        variables={'search': title},
+        lookup_label=f'"{title}"',
+    )
+
+
+async def fetch_anime_info_by_id(anilist_id: int) -> Dict[str, Any]:
+    """
+    Fetches anime information from AniList by numeric AniList media ID.
+    
+    Args:
+        anilist_id: Positive integer AniList media ID
+    
+    Returns:
+        Dictionary containing anime metadata
+    
+    Raises:
+        ValueError: If anilist_id is not a positive integer
+        Exception: If anime not found or API error occurs
+    """
+    if isinstance(anilist_id, bool) or not isinstance(anilist_id, int) or anilist_id <= 0:
+        raise ValueError(f"Invalid AniList ID: {anilist_id!r}")
+
+    return await _fetch_single_media(
+        query=ANIME_BY_ID_QUERY,
+        variables={'id': anilist_id},
+        lookup_label=f"ID {anilist_id}",
+    )
