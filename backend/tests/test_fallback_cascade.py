@@ -17,7 +17,7 @@ from starlette.requests import Request
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from api.routes import identify_poster
+from api.routes import fetch_themes_by_title, identify_poster
 from services.gemini_service import IdentificationResult
 from services.tracemoe_service import TraceMoeResult
 
@@ -279,6 +279,20 @@ class TestPhase4FallbackCascade(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(body["identificationMethod"], "tracemoe")
                 self.assertFalse(body["autoIngested"])
                 self.assertTrue(body["needsConfirmation"])
+
+    async def test_fetch_themes_by_title_calls_fetch_themes_in_parallel(self):
+        sample_api_themes = [
+            {"seasonName": "Season 1", "openings": [{"title": "Hacking to the Gate", "artist": "Kanako Itou"}], "endings": [], "osts": []}
+        ]
+        with patch("api.routes.fetch_themes_in_parallel", new=AsyncMock(return_value=(sample_api_themes, []))) as mock_fetch:
+            resp = await fetch_themes_by_title(_make_request(), title="  Steins;Gate  ")
+
+        body = json.loads(resp.body.decode("utf-8"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(body["success"])
+        self.assertEqual(len(body["themeData"]), 1)
+        self.assertEqual(body["themeData"][0]["openings"][0]["title"], "Hacking to the Gate")
+        mock_fetch.assert_awaited_once_with("Steins;Gate")
 
 
 if __name__ == "__main__":
