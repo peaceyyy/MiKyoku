@@ -564,8 +564,10 @@ async def identify_poster(
                 logger.warning(f"Auto-ingestion failed (non-fatal): {ingest_err}")
         
         # Step 4: Fetch themes from AnimeThemes API (parallel with Gemini)
-        logger.info(f"Fetching themes for: {validated_title}")
-        api_themes, gemini_themes = await fetch_themes_in_parallel(validated_title)
+        anilist_id_raw = anime_info.get('id') if isinstance(anime_info, dict) else None
+        anilist_id = anilist_id_raw if isinstance(anilist_id_raw, int) and not isinstance(anilist_id_raw, bool) else None
+        logger.info(f"Fetching themes for: {validated_title}" + (f" (AniList ID: {anilist_id})" if anilist_id else ""))
+        api_themes, gemini_themes = await fetch_themes_in_parallel(validated_title, anilist_id=anilist_id)
         
         # Step 5: Merge themes (API themes as base, Gemini OSTs as supplement)
         merged_themes = merge_theme_data(api_themes, gemini_themes)
@@ -606,19 +608,23 @@ async def identify_poster(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-async def fetch_themes_in_parallel(anime_title: str) -> tuple[List[Dict], List[Dict]]:
+async def fetch_themes_in_parallel(
+    anime_title: str,
+    anilist_id: Optional[int] = None,
+) -> tuple[List[Dict], List[Dict]]:
     """
     Fetch themes from both AnimeThemes API and Gemini in parallel.
     
     Args:
         anime_title: The validated anime title
+        anilist_id: Optional AniList media ID for exact AnimeThemes lookup
     
     Returns:
         Tuple of (api_themes, gemini_themes)
     """
     import asyncio
     
-    api_task = fetch_themes_from_api(anime_title)
+    api_task = fetch_themes_from_api(anime_title, anilist_id=anilist_id)
     gemini_task = fetch_supplemental_themes(anime_title)
     
     api_themes, gemini_themes_obj = await asyncio.gather(api_task, gemini_task)
@@ -883,7 +889,7 @@ async def fetch_themes_by_title(
         logger.info(f"[FETCH-THEMES] Fetching themes for: '{title}'")
         
         # Fetch themes from both sources
-        api_themes, gemini_themes = await fetch_themes_parallel(title.strip())
+        api_themes, gemini_themes = await fetch_themes_in_parallel(title.strip())
         
         # Merge themes
         merged_themes = merge_theme_data(api_themes, gemini_themes)

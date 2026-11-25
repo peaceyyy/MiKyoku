@@ -35,8 +35,9 @@ console_handler.setFormatter(formatter)
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
-root_logger.addHandler(file_handler)
-root_logger.addHandler(console_handler)
+if not root_logger.handlers:
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ logging.getLogger('faiss').setLevel(logging.WARNING)
 logging.getLogger('rag.vector_store').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('google').setLevel(logging.WARNING)
+logging.getLogger('google_genai').setLevel(logging.WARNING)
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
